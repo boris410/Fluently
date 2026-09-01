@@ -42,3 +42,6 @@ next-env.d.ts
 
 # local sqlite database
 /data
+
+# VS Code Local History extension
+/.history
