@@ -3,14 +3,17 @@ import Link from "next/link";
 import { ScenarioPicker } from "@/components/scenario-picker";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
-import { scenarios } from "@/lib/scenarios";
+import { listScenarios } from "@/lib/db";
 
 export const metadata: Metadata = {
   title: "選擇情境 — Fluently",
   description: "挑一個真實情境，開始今天的英文口說練習。",
 };
 
+export const dynamic = "force-dynamic";
+
 export default function ScenariosPage() {
+  const scenarios = listScenarios();
   return (
     <>
       <SiteHeader compact />

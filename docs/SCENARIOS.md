@@ -1,35 +1,29 @@
 # Fluently — 對話情境規格
 
-> 目前 9 個情境的完整記錄。**資料本體在 [`lib/scenarios.ts`](../lib/scenarios.ts)**，
-> 這份文件是它的說明書：欄位定義、每個情境的設定、以及新增情境的規則。
+> 目前 9 個情境的完整記錄。**執行時資料在 SQLite**（`scenes` / `scenarios` / `roles` / `characters`），
+> seed 目錄在 [`lib/scenarios.ts`](../lib/scenarios.ts)。
+> 這份文件是說明書：欄位定義、每個情境的設定、以及新增情境的規則。
 >
-> 兩邊不一致時以 `lib/scenarios.ts` 為準，並修正這份文件。
-> 情境之後會遷進 SQLite，屆時這份文件就是 seed 資料的依據。
+> 兩邊不一致時以 `lib/scenarios.ts` 的 seed 為準（開庫時 upsert），並修正這份文件。
 
 ---
 
 ## 1. 資料結構
 
 ```ts
-type Level = "beginner" | "intermediate" | "advanced";
-
-type Scenario = {
-  id: string;
-  emoji: string;
-  title: string;
-  titleZh: string;
-  blurb: string;
-  level: Level;
-  persona: string;
-  focus: string[];
-  opening: string;
-  tint: [string, string];
+type ScenarioCatalog = Scenario & {
+  sceneId: string; // scenes.id（咖啡店、街頭、職場…）
+  roleTitle: string; // 職位（櫃檯、路人…）→ roles.title
+  characterId: string; // characters.id（Bella、Sam…）
 };
 ```
 
 | 欄位 | 說明 | 撰寫規則 |
 |---|---|---|
-| `id` | 唯一代號，同時是路由 `/chat/[id]` | 小寫英文 + 連字號；**一旦公開就不要再改**（會斷連結與日後的 DB 外鍵） |
+| `id` | 唯一代號，同時是路由 `/chat/[id]` | 小寫英文 + 連字號；**一旦公開就不要再改**（會斷連結與 DB 外鍵） |
+| `sceneId` | 所屬場景 | 對應 `SCENE_CATALOG` |
+| `roleTitle` | 情境裡的職位 | 中文短名，如「櫃檯」 |
+| `characterId` | 扮演此職位的人物 | 對應 `CHARACTER_CATALOG`（Bella、Andy…） |
 | `emoji` | 卡片上的圖示 | 單一 emoji，避免膚色／性別變體 |
 | `title` | 英文情境名 | 2–3 個字的名詞片語，Title Case |
 | `titleZh` | 中文情境名 | 4–6 字，口語、具體 |
@@ -45,7 +39,8 @@ type Scenario = {
 | 匯出 | 用途 |
 |---|---|
 | `LEVELS` | 難度清單（`id` / `label` 中文 / `en` 英文），供篩選器與 badge 使用 |
-| `getScenario(id)` | 依 id 取單一情境，找不到回 `undefined`（`/chat/[id]` 據此走 `notFound()`） |
+| `SCENE_CATALOG` / `CHARACTER_CATALOG` / `scenarios` | seed 進 SQLite 的目錄 |
+| `listScenarios()` / `getScenario(id)` | **在 `lib/db.ts`**：從 SQLite 組出 UI 用的 `Scenario`（含 scene 的 emoji/tint 與 role 的 persona） |
 | `levelLabel(level)` | 取難度標籤的 helper，**目前沒有被使用**（兩處頁面各自寫了 `LEVELS.find(...)`） |
 
 ---
@@ -199,11 +194,11 @@ type Scenario = {
 
 ## 6. 新增一個情境
 
-1. 在 [`lib/scenarios.ts`](../lib/scenarios.ts) 的 `scenarios` 陣列**依難度分組的位置**插入新物件（目前排序是 初級 → 中級 → 進階）。
-2. 依第 1 節的撰寫規則填滿 9 個欄位。
-3. `tint` 挑一組還沒被用過的低飽和色，淺色亮度約 90%、深色約 20%。
+1. 在 [`lib/scenarios.ts`](../lib/scenarios.ts) 的 `scenarios` 陣列**依難度分組的位置**插入新物件（目前排序是 初級 → 中級 → 進階）。必要時先在 `SCENE_CATALOG` / `CHARACTER_CATALOG` 加場景與人物。
+2. 依第 1 節的撰寫規則填滿欄位（含 `sceneId` / `roleTitle` / `characterId`）。
+3. `tint` 挑一組還沒被用過的低飽和色，淺色亮度約 90%、深色約 20%（寫在對應的 scene 上）。
 4. 回來更新這份文件的第 3 節總表與第 4 節細節。
-5. 跑 `npm run build`——`/chat/[id]` 用 `generateStaticParams`，新情境會自動產生靜態頁。
+5. 跑 `npm run build`。下次開庫 `seed()` 會 upsert 進 SQLite。
 
 檢查清單：
 
@@ -228,7 +223,7 @@ type Scenario = {
 | `focus` | `Steer the conversation so the learner naturally practises: …` |
 | `opening` | session 建立時寫入資料庫的第一則 `model` 訊息 |
 
-`id` 現在也是 `sessions.scenario_id` 與 `api_calls.scenario_id` 的值，
+`id` 現在是 `sessions.scenario_id` 與 `scenarios.id` 的值，
 **更加不可以更動**——改了會讓既有的用量紀錄對不上情境。
 
-仍未實作：情境本身還存在 `lib/scenarios.ts`，尚未 seed 進 SQLite。
+執行時情境已在 SQLite；改 seed 後重啟 dev server（或等 `getDb()` 重建連線）就會 upsert。

@@ -17,35 +17,58 @@
 ### Schema
 
 ```sql
+user_students               -- 學習者（本機可切換；尚無登入）
+  id           TEXT PK      -- seed 預設 'default'
+  name         TEXT
+  created_at / updated_at
+
+scenes                      -- 場景：咖啡店 / 街頭 / 職場…
+  id, title, title_zh, emoji, tint_light, tint_dark
+
+scenarios                   -- 對話情境：點咖啡 / 面試…（路由 /chat/[id] 的 id）
+  id           TEXT PK      -- 維持 'cafe' 等公開 id，不可改
+  scene_id     → scenes(id)
+  title, title_zh, blurb, level, focus (JSON), opening, sort_order
+
+roles                       -- 情境裡的職位（櫃檯、路人…）
+  id           TEXT PK      -- '{scenarioId}-tutor'
+  scenario_id  → scenarios(id)
+  character_id → characters(id)
+  title, persona            -- persona 餵給 Gemini
+
+characters                  -- 系統裡的人（Bella、Andy）
+  id, name
+  elevenlabs_voice_id → elevenlabs_voices(id)
+
+elevenlabs_voices
+  id, voice_id (ElevenLabs), label
+  -- seed 時從 ELEVENLABS_VOICE_ID 寫入；沒有再退回 env
+
 sessions
-  id           TEXT PRIMARY KEY      -- crypto.randomUUID()
-  scenario_id  TEXT NOT NULL         -- 對應 lib/scenarios.ts 的 id
-  mode         TEXT NOT NULL DEFAULT 'script'  -- 'script' 獨白式 / 'live' 真實情境
-  created_at   INTEGER NOT NULL      -- epoch ms
-  updated_at   INTEGER NOT NULL
+  id           TEXT PK
+  scenario_id  TEXT NOT NULL          -- → scenarios(id)
+  user_student_id TEXT                -- → user_students
+  role_id      TEXT                   -- 這場 AI 演哪個 role
+  mode         TEXT DEFAULT 'script'
+  created_at / updated_at
 
 messages
   id           INTEGER PK AUTOINCREMENT
-  session_id   TEXT → sessions(id) ON DELETE CASCADE
-  role         TEXT CHECK (role IN ('user','model'))   -- 'model' = AI 家教
-  content      TEXT NOT NULL
-  created_at   INTEGER NOT NULL
+  session_id   → sessions(id) ON DELETE CASCADE
+  role         TEXT CHECK (role IN ('user','model'))
+  user_student_id  TEXT   -- 學習者說話時有值
+  character_id     TEXT   -- 家教說話時有值
+  content, created_at
 
-api_calls
+api_calls                       -- 用量帳：一列 = 一次計費呼叫
   id             INTEGER PK AUTOINCREMENT
-  session_id     TEXT → sessions(id) ON DELETE CASCADE
-  scenario_id    TEXT NOT NULL
-  kind           TEXT NOT NULL DEFAULT 'chat'  -- 'chat' 對話 / 'tts' 語音合成
-  model          TEXT NOT NULL
-  voice          TEXT      -- 只有 kind='tts' 會有值
-  prompt_tokens  INTEGER   -- usageMetadata.promptTokenCount
-  output_tokens  INTEGER   -- usageMetadata.candidatesTokenCount
-  thought_tokens INTEGER   -- usageMetadata.thoughtsTokenCount（思考模型才有）
-  total_tokens   INTEGER   -- usageMetadata.totalTokenCount
-  latency_ms     INTEGER
-  ok             INTEGER   -- 1 成功 / 0 失敗
-  error          TEXT      -- 失敗時的 Gemini 錯誤訊息
-  created_at     INTEGER NOT NULL
+  session_id     → sessions(id) ON DELETE CASCADE
+  kind           TEXT DEFAULT 'chat'  -- 'chat' / 'tts'
+  model          TEXT
+  prompt_tokens / output_tokens / thought_tokens / total_tokens
+  latency_ms, ok, error, created_at
+  -- 情境從 session→scenario 推；音色從 session→role→character→elevenlabs_voices 推
+  -- 舊庫可能仍有 scenario_id / voice 欄，新寫入不再當成來源
 ```
 
 ```sql
@@ -57,6 +80,7 @@ api_logs                        -- 每一次對外 API 呼叫的原始紀錄
   model         TEXT            -- verify-key 沒有模型，為 NULL
   detail        TEXT            -- 額外參數，例如 'voice=Kore'
   session_id    TEXT            -- 關聯用，刻意不加外鍵
+  user_student_id TEXT          -- 可空，不加外鍵
   input         TEXT            -- 送出的內容（超過 4000 字截斷）
   output        TEXT            -- 收到的內容；語音記成 '[audio] 24000Hz…1.8s'
   input_tokens  INTEGER
@@ -71,22 +95,51 @@ api_logs                        -- 每一次對外 API 呼叫的原始紀錄
 ```
 
 索引：`messages(session_id, id)`、`api_calls(session_id)`、`api_calls(created_at)`、
-`api_calls(kind)`、`api_logs(requested_at)`、`api_logs(operation)`。
+`api_calls(kind)`、`api_logs(requested_at)`、`api_logs(operation)`、
+`sessions(user_student_id)`、`scenarios(scene_id)`、`roles(scenario_id)`。
 
-### 遷移
+### 遷移與種子
 
-`migrate()` 用 `PRAGMA table_info` 檢查欄位是否存在，缺了就 `ALTER TABLE` 補上，
-舊資料列自動視為 `kind='chat'`。**依賴新欄位的索引必須建在 `migrate()` 裡面**，
-不能放進 `SCHEMA` 字串——否則舊資料庫會在建索引時因為欄位不存在而爆掉。
+`migrate()` 用 `PRAGMA table_info` 檢查欄位是否存在，缺了就 `ALTER TABLE` 補上。
+**依賴新欄位的索引必須建在 `migrate()` 裡面**，不能放進 `SCHEMA` 字串。
 
-### 三張表的分工
+`seed()` 每次開庫會 upsert [`lib/scenarios.ts`](../lib/scenarios.ts) 的目錄到
+`scenes` / `scenarios` / `roles` / `characters` / `elevenlabs_voices`，並確保有一筆
+`user_students.id = 'default'`。舊 session / messages 由 `backfill()` 補上學生與角色。
+
+列表與對話頁的 `getScenario()` / `listScenarios()` **讀 SQLite**，不再直接讀 TS 陣列。
+
+### 表關係
+
+`api_logs` 的 `session_id` / `user_student_id` 只是關聯用，**沒有外鍵**。
+
+```mermaid
+erDiagram
+  user_students ||--o{ sessions : practices
+  scenes ||--o{ scenarios : contains
+  scenarios ||--o{ roles : has
+  characters ||--o{ roles : plays
+  elevenlabs_voices ||--o{ characters : voices
+  sessions }o--|| scenarios : of
+  sessions }o--|| user_students : by
+  sessions }o--o| roles : tutorAs
+  sessions ||--o{ messages : has
+  sessions ||--o{ api_calls : billed
+  messages }o--o| user_students : learner
+  messages }o--o| characters : tutor
+```
+
+### 表的分工
 
 | 表 | 回答的問題 |
 |---|---|
-| `sessions` | 使用者練過哪些情境、什麼時候 |
+| `user_students` | 誰在練 |
+| `scenes` / `scenarios` / `roles` / `characters` | 在哪、練什麼場面、AI 演誰、叫什麼名字 |
+| `elevenlabs_voices` | 那個角色用哪顆 ElevenLabs 音色 |
+| `sessions` | 這段練習屬於誰、哪個情境、哪個角色 |
 | `messages` | **記憶**——每次呼叫 Gemini 時整段歷史都從這裡撈出來重送 |
-| `api_calls` | **用量帳**——一列 = 一次計費呼叫，`kind` 分對話與語音，供統計聚合 |
-| `api_logs` | **原始紀錄**——一列 = 一次對外呼叫，含送出/收到的實際內容與狀態碼，供除錯 |
+| `api_calls` | **用量帳**——一列 = 一次計費呼叫，`kind` 分對話與語音 |
+| `api_logs` | **原始紀錄**——一列 = 一次對外呼叫，含送出/收到的實際內容與狀態碼 |
 
 `messages` 與 `api_calls` 刻意分開：一次失敗的呼叫不會產生 AI 訊息，
 但它**仍然是一次呼叫**，必須計入用量與錯誤率。
@@ -104,6 +157,8 @@ api_logs                        -- 每一次對外 API 呼叫的原始紀錄
 | 記錄什麼 | token 數、延遲、成敗 | 連同**實際送出與收到的文字**、HTTP 狀態碼、平台、端點 |
 | 涵蓋範圍 | 對話與語音 | **所有**對外呼叫，含不花 token 的 `verify-key` |
 | 外鍵 | 有（`session_id`） | **無**——記錄失敗絕不能拖垮請求 |
+
+`/usage` 的「各情境用量」以 `api_calls JOIN sessions` 取 `scenario_id`，不再讀 `api_calls.scenario_id`。
 
 `logApiCall()` 內部包了 try/catch，寫入失敗只會在 console 留一行錯誤，不會讓 API 呼叫失敗。
 
@@ -198,13 +253,13 @@ Route handler（server-only）再傳 `onCall: (call) => logApiCall({ ...call, se
 
 ElevenLabs 的 key **只存在** `.env.local` 的 `ELEVENLABS_API_KEY`（沒有 `NEXT_PUBLIC_` 前綴）。
 瀏覽器打 [`/api/elevenlabs`](../app/api/elevenlabs/route.ts)，由伺服器加上 `xi-api-key` 轉送給 ElevenLabs。
-預設 voice 從 `.env.local` 的 `ELEVENLABS_VOICE_ID` 讀取，程式裡不寫死。
+對話裡的音色優先用 session → role → character → `elevenlabs_voices.voice_id`；沒有再退回 `.env.local` 的 `ELEVENLABS_VOICE_ID`（也是 seed 來源）。
 
 對話頁（獨白式與真實情境）預設走這條 TTS：`speakReply()` 依設定打 `/api/elevenlabs`，
 把家教回覆用角色音色唸出來，舞台畫面仍依 phase 切靜態圖。測試頁在 [`/tts`](../app/tts/page.tsx)。
 
 有 `scenarioId` 時會建／續 session，並寫 `api_calls`（`kind='tts'`，token 為 0——ElevenLabs 不回 `usageMetadata`，不估算）以及 `api_logs`（`platform='elevenlabs'`）。
-測試頁沒帶情境，只寫 `api_logs`。
+測試頁沒帶情境，只寫 `api_logs`，音色退回 env。
 
 ---
 
@@ -227,7 +282,7 @@ ElevenLabs 的 key **只存在** `.env.local` 的 `ELEVENLABS_API_KEY`（沒有 
 
 沒存過偏好時 `getVoiceSource()` 回 `elevenlabs`。雲端合成失敗會退回瀏覽器語音，對話不會突然安靜。
 
-Voice Library 的音色在免費方案會回 402，畫面會說明原因並改用系統語音。音色 ID 只從 `ELEVENLABS_VOICE_ID` 讀取。
+Voice Library 的音色在免費方案會回 402，畫面會說明原因並改用系統語音。角色音色存在 `elevenlabs_voices`，env 只當種子與後備。
 
 **Gemini TTS 的呼叫方式**（[`synthesizeSpeech`](../lib/gemini.ts)）：
 

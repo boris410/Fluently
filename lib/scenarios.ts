@@ -17,6 +17,50 @@ export type Scenario = {
   tint: [string, string];
 };
 
+/** Seed ids — stable, used as SQLite primary keys. */
+export const DEFAULT_STUDENT_ID = "default";
+export const DEFAULT_STUDENT_NAME = "Learner";
+export const DEFAULT_VOICE_ROW_ID = "default";
+
+export type SceneCatalog = {
+  id: string;
+  title: string;
+  titleZh: string;
+  emoji: string;
+  tint: [string, string];
+};
+
+export const SCENE_CATALOG: SceneCatalog[] = [
+  { id: "cafe", title: "Cafe", titleZh: "咖啡店", emoji: "☕", tint: ["#f3e7d8", "#3a2f24"] },
+  { id: "street", title: "Street", titleZh: "街頭", emoji: "🧭", tint: ["#dfeae0", "#243329"] },
+  { id: "party", title: "Party", titleZh: "派對", emoji: "💬", tint: ["#e6e3f2", "#2b2937"] },
+  { id: "hotel", title: "Hotel", titleZh: "飯店", emoji: "🏨", tint: ["#dee7f0", "#232c36"] },
+  { id: "clinic", title: "Clinic", titleZh: "診所", emoji: "🩺", tint: ["#f0dfe2", "#372529"] },
+  { id: "phone", title: "Phone", titleZh: "電話", emoji: "📞", tint: ["#e9e4d6", "#332f24"] },
+  { id: "workplace", title: "Workplace", titleZh: "職場", emoji: "💼", tint: ["#e2e6ea", "#262b2f"] },
+  { id: "forum", title: "Forum", titleZh: "論壇", emoji: "⚖️", tint: ["#efe2d3", "#372c22"] },
+];
+
+export type CharacterCatalog = { id: string; name: string };
+
+export const CHARACTER_CATALOG: CharacterCatalog[] = [
+  { id: "bella", name: "Bella" },
+  { id: "jordan", name: "Jordan" },
+  { id: "sam", name: "Sam" },
+  { id: "riley", name: "Riley" },
+  { id: "mei", name: "Mei" },
+  { id: "alex", name: "Alex" },
+  { id: "morgan", name: "Morgan" },
+  { id: "taylor", name: "Taylor" },
+  { id: "quinn", name: "Quinn" },
+];
+
+export type ScenarioCatalog = Scenario & {
+  sceneId: string;
+  roleTitle: string;
+  characterId: string;
+};
+
 export const LEVELS: { id: Level; label: string; en: string }[] = [
   { id: "beginner", label: "初級", en: "Beginner" },
   { id: "intermediate", label: "中級", en: "Intermediate" },
@@ -26,9 +70,12 @@ export const LEVELS: { id: Level; label: string; en: string }[] = [
 export const levelLabel = (level: Level) =>
   LEVELS.find((l) => l.id === level) ?? LEVELS[0];
 
-export const scenarios: Scenario[] = [
+export const scenarios: ScenarioCatalog[] = [
   {
     id: "cafe",
+    sceneId: "cafe",
+    roleTitle: "櫃檯",
+    characterId: "bella",
     emoji: "☕",
     title: "Ordering Coffee",
     titleZh: "咖啡廳點餐",
@@ -42,6 +89,9 @@ export const scenarios: Scenario[] = [
   },
   {
     id: "directions",
+    sceneId: "street",
+    roleTitle: "路人",
+    characterId: "jordan",
     emoji: "🧭",
     title: "Asking Directions",
     titleZh: "街頭問路",
@@ -55,6 +105,9 @@ export const scenarios: Scenario[] = [
   },
   {
     id: "small-talk",
+    sceneId: "party",
+    roleTitle: "派對賓客",
+    characterId: "sam",
     emoji: "💬",
     title: "Small Talk",
     titleZh: "閒聊破冰",
@@ -68,6 +121,9 @@ export const scenarios: Scenario[] = [
   },
   {
     id: "hotel",
+    sceneId: "hotel",
+    roleTitle: "櫃檯",
+    characterId: "riley",
     emoji: "🏨",
     title: "Hotel Check-in",
     titleZh: "飯店入住",
@@ -81,6 +137,9 @@ export const scenarios: Scenario[] = [
   },
   {
     id: "clinic",
+    sceneId: "clinic",
+    roleTitle: "醫師",
+    characterId: "mei",
     emoji: "🩺",
     title: "At the Clinic",
     titleZh: "看診就醫",
@@ -94,6 +153,9 @@ export const scenarios: Scenario[] = [
   },
   {
     id: "phone-call",
+    sceneId: "phone",
+    roleTitle: "客服",
+    characterId: "alex",
     emoji: "📞",
     title: "On the Phone",
     titleZh: "電話溝通",
@@ -107,6 +169,9 @@ export const scenarios: Scenario[] = [
   },
   {
     id: "interview",
+    sceneId: "workplace",
+    roleTitle: "面試官",
+    characterId: "morgan",
     emoji: "💼",
     title: "Job Interview",
     titleZh: "英文面試",
@@ -120,6 +185,9 @@ export const scenarios: Scenario[] = [
   },
   {
     id: "meeting",
+    sceneId: "workplace",
+    roleTitle: "主管",
+    characterId: "taylor",
     emoji: "📊",
     title: "Business Meeting",
     titleZh: "商務會議",
@@ -133,6 +201,9 @@ export const scenarios: Scenario[] = [
   },
   {
     id: "debate",
+    sceneId: "forum",
+    roleTitle: "對談者",
+    characterId: "quinn",
     emoji: "⚖️",
     title: "Opinion & Debate",
     titleZh: "觀點交鋒",
@@ -146,4 +217,4 @@ export const scenarios: Scenario[] = [
   },
 ];
 
-export const getScenario = (id: string) => scenarios.find((s) => s.id === id);
+export const roleIdFor = (scenarioId: string) => `${scenarioId}-tutor`;

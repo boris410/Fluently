@@ -7,10 +7,10 @@ import {
   getDailyUsage,
   getLogSummary,
   getRecentSessions,
+  getScenario,
   getTotals,
   getUsageByScenario,
 } from "@/lib/db";
-import { getScenario } from "@/lib/scenarios";
 
 export const metadata: Metadata = {
   title: "用量統計 — Fluently",

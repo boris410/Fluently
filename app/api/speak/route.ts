@@ -1,6 +1,7 @@
 import {
   appendMessage,
   createSession,
+  getScenario,
   logApiCall,
   recordCall,
   sessionExists,
@@ -12,7 +13,6 @@ import {
   isKnownVoice,
   synthesizeSpeech,
 } from "@/lib/gemini";
-import { getScenario } from "@/lib/scenarios";
 
 /**
  * Turns one tutor line into audio with a Gemini TTS voice, and books the
@@ -75,10 +75,8 @@ export async function POST(request: Request) {
 
     recordCall({
       sessionId,
-      scenarioId: scenario.id,
       kind: "tts",
       model,
-      voice,
       promptTokens: result.usage.promptTokens,
       outputTokens: result.usage.outputTokens,
       thoughtTokens: 0,
@@ -104,10 +102,8 @@ export async function POST(request: Request) {
 
     recordCall({
       sessionId,
-      scenarioId: scenario.id,
       kind: "tts",
       model,
-      voice,
       promptTokens: 0,
       outputTokens: 0,
       thoughtTokens: 0,

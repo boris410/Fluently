@@ -1,8 +1,10 @@
 import {
   appendMessage,
   createSession,
+  getScenario,
   logApiCall,
   recordCall,
+  resolveSessionVoiceId,
   sessionExists,
 } from "@/lib/db";
 import {
@@ -12,7 +14,6 @@ import {
   readElevenLabsVoiceId,
   synthesizeElevenLabs,
 } from "@/lib/elevenlabs";
-import { getScenario } from "@/lib/scenarios";
 
 function userFacingError(message: string, status: number) {
   if (
@@ -59,19 +60,6 @@ export async function POST(request: Request) {
     return Response.json({ error: "沒有要唸的內容" }, { status: 400 });
   }
 
-  const voiceId = readElevenLabsVoiceId();
-  if (!voiceId) {
-    return Response.json(
-      { error: "還沒有音色。在 .env.local 設 ELEVENLABS_VOICE_ID。" },
-      { status: 400 },
-    );
-  }
-
-  const knownModel = ELEVENLABS_MODELS.some((m) => m.id === body.model);
-  const model = knownModel
-    ? body.model!
-    : process.env.ELEVENLABS_MODEL?.trim() || DEFAULT_ELEVENLABS_MODEL;
-
   const scenario = body.scenarioId ? getScenario(body.scenarioId) : undefined;
   let sessionId = body.sessionId ?? null;
   if (scenario) {
@@ -83,6 +71,21 @@ export async function POST(request: Request) {
       appendMessage(sessionId, "model", scenario.opening);
     }
   }
+
+  const voiceId =
+    (sessionId ? resolveSessionVoiceId(sessionId) : null) ??
+    readElevenLabsVoiceId();
+  if (!voiceId) {
+    return Response.json(
+      { error: "還沒有音色。在 .env.local 設 ELEVENLABS_VOICE_ID。" },
+      { status: 400 },
+    );
+  }
+
+  const knownModel = ELEVENLABS_MODELS.some((m) => m.id === body.model);
+  const model = knownModel
+    ? body.model!
+    : process.env.ELEVENLABS_MODEL?.trim() || DEFAULT_ELEVENLABS_MODEL;
 
   try {
     const result = await synthesizeElevenLabs({
@@ -96,10 +99,8 @@ export async function POST(request: Request) {
     if (scenario && sessionId) {
       recordCall({
         sessionId,
-        scenarioId: scenario.id,
         kind: "tts",
         model,
-        voice: voiceId,
         promptTokens: 0,
         outputTokens: 0,
         thoughtTokens: 0,
@@ -128,10 +129,8 @@ export async function POST(request: Request) {
     if (scenario && sessionId) {
       recordCall({
         sessionId,
-        scenarioId: scenario.id,
         kind: "tts",
         model,
-        voice: voiceId,
         promptTokens: 0,
         outputTokens: 0,
         thoughtTokens: 0,

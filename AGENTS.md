@@ -28,14 +28,14 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 **[`docs/SCENARIOS.md`](docs/SCENARIOS.md) 記錄了全部 9 個對話情境**：
 `Scenario` 欄位定義、難度判準、每個情境的角色設定與開場白、欄位在各頁面的使用位置，
-以及新增情境的步驟。情境資料本體在 `lib/scenarios.ts`。
+以及新增情境的步驟。Seed 目錄在 `lib/scenarios.ts`，執行時讀 SQLite。
 
 新增或修改情境時，**同一個 commit 內更新 `docs/SCENARIOS.md`**；
 `id` 是路由與未來 DB 外鍵，公開後不要更動。
 
 ## 動資料層或 AI 串接前必讀
 
-**[`docs/DATA.md`](docs/DATA.md)** 記錄 SQLite schema（`sessions` / `messages` / `api_calls`）、
+**[`docs/DATA.md`](docs/DATA.md)** 記錄 SQLite schema（學習者、場景、情境、角色、用量帳、呼叫紀錄）、
 Gemini 串接方式、API key 流向、token 與來回次數的計算來源，以及語音的實作。
 
 重點規則：

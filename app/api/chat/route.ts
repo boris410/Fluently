@@ -2,6 +2,7 @@ import {
   appendMessage,
   createSession,
   getHistory,
+  getScenario,
   logApiCall,
   recordCall,
   sessionExists,
@@ -12,7 +13,6 @@ import {
   buildSystemInstruction,
   generateReply,
 } from "@/lib/gemini";
-import { getScenario } from "@/lib/scenarios";
 
 /**
  * One conversational turn: persist what the learner said, ask Gemini for
@@ -84,7 +84,6 @@ export async function POST(request: Request) {
     appendMessage(sessionId, "model", result.text);
     recordCall({
       sessionId,
-      scenarioId: scenario.id,
       kind: "chat",
       model,
       promptTokens: result.usage.promptTokens,
@@ -116,7 +115,6 @@ export async function POST(request: Request) {
     // page shows the real error rate.
     recordCall({
       sessionId,
-      scenarioId: scenario.id,
       kind: "chat",
       model,
       promptTokens: 0,

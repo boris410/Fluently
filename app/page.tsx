@@ -3,7 +3,7 @@ import { HeroComposer } from "@/components/hero-composer";
 import { Mark } from "@/components/logo";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
-import { scenarios } from "@/lib/scenarios";
+import { listScenarios } from "@/lib/db";
 
 const FEATURES = [
   {
@@ -29,7 +29,10 @@ const STEPS = [
   { n: "03", title: "收下回饋", body: "對話結束給你一份重點回顧：說得好的地方、可以再更自然的講法。" },
 ];
 
+export const dynamic = "force-dynamic";
+
 export default function Home() {
+  const scenarios = listScenarios();
   return (
     <>
       <SiteHeader />

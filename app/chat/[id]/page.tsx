@@ -4,9 +4,11 @@ import { ChatRoom } from "@/components/chat-room";
 import { LiveRoom } from "@/components/live-room";
 import { ModePicker } from "@/components/mode-picker";
 import { SettingsMenu } from "@/components/settings-menu";
-import { getHistory, getSessionStats, sessionExists } from "@/lib/db";
-import { LEVELS, getScenario } from "@/lib/scenarios";
+import { getHistory, getScenario, getSessionStats, sessionExists } from "@/lib/db";
+import { LEVELS } from "@/lib/scenarios";
 import type { ChatTurn } from "@/lib/use-conversation";
+
+export const dynamic = "force-dynamic";
 
 export async function generateMetadata(props: PageProps<"/chat/[id]">) {
   const { id } = await props.params;
