@@ -151,6 +151,16 @@ function speakInBrowser(
   }, 900);
 }
 
+class ClipError extends Error {
+  sessionId: string | null;
+
+  constructor(message: string, sessionId: string | null) {
+    super(message);
+    this.name = "ClipError";
+    this.sessionId = sessionId;
+  }
+}
+
 async function fetchClip(options: {
   path: "/api/speak" | "/api/elevenlabs";
   text: string;
@@ -173,7 +183,10 @@ async function fetchClip(options: {
 
   if (!res.ok) {
     const detail = await res.json().catch(() => null);
-    throw new Error(detail?.error ?? `語音合成失敗（${res.status}）`);
+    throw new ClipError(
+      detail?.error ?? `語音合成失敗（${res.status}）`,
+      typeof detail?.sessionId === "string" ? detail.sessionId : null,
+    );
   }
 
   const blob = await res.blob();
@@ -216,7 +229,7 @@ export async function speakReply(
     /** Called when the browser refused to play without a user gesture. */
     onBlocked?: () => void;
   },
-) {
+): Promise<string | null> {
   stopSpeaking();
 
   // Yield once so callers can invoke this straight from an effect without
@@ -226,23 +239,24 @@ export async function speakReply(
   const source = getVoiceSource();
   if (source === "browser") {
     speakInBrowser(text, options.onState, options.onBlocked);
-    return;
+    return options.sessionId;
   }
 
   const voice = source === "elevenlabs" ? "elevenlabs" : getVoiceName();
   const cacheKey = `${source}::${voice}::${text}`;
   const cached = clipCache.get(cacheKey);
 
-  if (cached) {
+  // Skip the cache when we still need the server to mint a session.
+  if (cached && options.sessionId) {
     options.onState?.("loading");
     try {
       await play(cached, options.onState);
-      return;
+      return options.sessionId;
     } catch (error) {
       if (isAutoplayBlocked(error)) {
         options.onState?.("idle");
         options.onBlocked?.();
-        return;
+        return options.sessionId;
       }
       clipCache.delete(cacheKey);
     }
@@ -261,7 +275,10 @@ export async function speakReply(
     clipCache.set(cacheKey, clip.url);
     if (clip.sessionId) options.onSession?.(clip.sessionId);
     await play(clip.url, options.onState);
+    return clip.sessionId;
   } catch (error) {
+    const bookedId = error instanceof ClipError ? error.sessionId : null;
+    if (bookedId) options.onSession?.(bookedId);
     options.onState?.("idle");
 
     // A blocked autoplay is not a TTS failure — the clip is fine, the
@@ -269,13 +286,14 @@ export async function speakReply(
     // browser voice would be blocked too.
     if (isAutoplayBlocked(error)) {
       options.onBlocked?.();
-      return;
+      return bookedId ?? options.sessionId;
     }
 
     options.onFallback?.(
       error instanceof Error ? error.message : "語音合成失敗",
     );
     speakInBrowser(text, options.onState, options.onBlocked);
+    return bookedId ?? options.sessionId;
   }
 }
 

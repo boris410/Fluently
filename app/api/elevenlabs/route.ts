@@ -142,6 +142,9 @@ export async function POST(request: Request) {
       });
     }
 
-    return Response.json({ error: message }, { status });
+    return Response.json(
+      { error: message, ...(sessionId ? { sessionId } : {}) },
+      { status },
+    );
   }
 }

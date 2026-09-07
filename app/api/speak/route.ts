@@ -33,6 +33,7 @@ export async function POST(request: Request) {
     voice?: string;
     scenarioId?: string;
     sessionId?: string;
+    mode?: string;
   };
   try {
     body = await request.json();
@@ -56,7 +57,10 @@ export async function POST(request: Request) {
   // has not spoken yet (replaying the opening line before their first turn).
   let sessionId = body.sessionId;
   if (!sessionId || !sessionExists(sessionId)) {
-    sessionId = createSession(scenario.id);
+    sessionId = createSession(
+      scenario.id,
+      body.mode === "live" ? "live" : "script",
+    );
     appendMessage(sessionId, "model", scenario.opening);
   }
 
@@ -113,6 +117,6 @@ export async function POST(request: Request) {
       error: message,
     });
 
-    return Response.json({ error: message }, { status });
+    return Response.json({ error: message, sessionId }, { status });
   }
 }

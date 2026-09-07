@@ -254,8 +254,13 @@ Voice Library 的音色在免費方案會回 402，畫面會說明原因並改�
 
 ### 自動出聲與瀏覽器的自動播放限制
 
-進入對話頁時會**直接唸出開場白**（`自動朗讀家教回覆` 開啟時），之後每則回覆也自動播放。
+進入對話頁時會**直接唸出開場白**（新房間一律先由家教開口，用來建立 `session`）。
+之後每則回覆仍看 `自動朗讀家教回覆`（真實情境模式除外，它帶 `forceSpeak`）。
 續接舊對話（`?session=`）刻意不自動播放——一進門就重播很久以前的句子只會讓人困惑。
+
+開場 TTS 會在合成前建立 session，並用 `x-session-id` 回給瀏覽器；合成失敗則改放在 JSON 的 `sessionId`。
+使用者若在開場音還在 loading 時就送出第一句，`send` 會等這顆 id 再到 `/api/chat`，避免兩邊各建一筆。
+沒有 session 的新開場不走語音快取，否則伺服器不會被叫到、session 也建不起來。
 
 瀏覽器在使用者尚未與該頁面互動前會擋掉播放，兩條路徑的表現不同，所以分開處理：
 
@@ -309,7 +314,8 @@ Voice Library 的音色在免費方案會回 402，畫面會說明原因並改�
 
 1. 取 key（標頭 → 環境變數），沒有就回 `401`
 2. 驗證 `scenarioId` 與訊息內容
-3. 沒有 `sessionId` → 建立 session，並**先寫入情境開場白**作為第一則 `model` 訊息
+3. 沒有 `sessionId` → 建立 session，並**先寫入情境開場白**作為第一則 `model` 訊息。
+   新房間通常已有開場 TTS 建好的 id，這一步只在瀏覽器語音（沒打 TTS API）時才會走到。
 4. 寫入使用者訊息
 5. `getHistory()` 撈整段歷史 → 呼叫 Gemini
 6. 成功：寫入 AI 訊息 + 寫入 `api_calls`（`ok=1`）
@@ -319,9 +325,9 @@ Voice Library 的音色在免費方案會回 402，畫面會說明原因並改�
 `?mode=` 決定進哪一種介面（`script` / `live`）；兩者都走同一組 API 與資料表，
 差別只在前端呈現。`sessions.mode` 記下這段對話是用哪個模式開始的。
 
-[`app/api/speak/route.ts`](../app/api/speak/route.ts) 是同樣的形狀：驗 key → 驗音色 →
-（必要時建 session）→ 合成 → 寫 `api_calls`（`kind='tts'`）→ 回傳 WAV。
-session id 透過 `x-session-id` 標頭回給用戶端，因為 body 是二進位音訊。
+[`app/api/speak/route.ts`](../app/api/speak/route.ts) 與 [`app/api/elevenlabs/route.ts`](../app/api/elevenlabs/route.ts) 是同樣的形狀：驗 key → 驗音色 →
+（必要時建 session）→ 合成 → 寫 `api_calls`（`kind='tts'`）→ 回傳音訊。
+成功時 session id 透過 `x-session-id` 標頭回給用戶端（body 是二進位音訊）；失敗時放在 JSON 的 `sessionId`，讓後續 `/api/chat` 沿用同一筆。
 
 ---
 

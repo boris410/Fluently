@@ -85,6 +85,12 @@ export function useConversation({
   const hasKey = storedKey === "set" && !rejectedKey;
 
   const greeted = useRef(false);
+  const sessionIdRef = useRef(initialSessionId);
+  const openingSessionRef = useRef<{
+    promise: Promise<string | null>;
+    resolve: (id: string | null) => void;
+    settled: boolean;
+  } | null>(null);
   // Kept in a ref so `play` stays stable even when the callback changes.
   // Synced in an effect because refs must not be written during render.
   const finishedRef = useRef(onSpeechFinished);
@@ -94,15 +100,28 @@ export function useConversation({
 
   useEffect(() => () => stopSpeaking(), []);
 
+  const rememberSession = useCallback((id: string) => {
+    if (!sessionIdRef.current) sessionIdRef.current = id;
+    setSessionId((prev) => prev ?? id);
+  }, []);
+
+  const settleOpeningSession = useCallback((id: string | null) => {
+    const opening = openingSessionRef.current;
+    if (!opening || opening.settled) return;
+    opening.settled = true;
+    opening.resolve(id);
+  }, []);
+
   /**
    * Speaks one tutor line. Every state change happens inside a callback, so
    * this is safe to call straight from an effect as well as a click.
    */
   const play = useCallback(
     (turn: ChatTurn, sessionOverride?: string | null) => {
-      void speakReply(turn.text, {
+      const booked = sessionOverride ?? sessionIdRef.current;
+      return speakReply(turn.text, {
         scenarioId: scenario.id,
-        sessionId: sessionOverride ?? sessionId,
+        sessionId: booked,
         mode,
         onState: (state) => {
           setSpeakState(state);
@@ -117,10 +136,23 @@ export function useConversation({
         onFallback: (reason) =>
           setVoiceNotice(`角色語音沒出來，已改用瀏覽器語音。（${reason}）`),
         onBlocked: () => setNeedsGesture(true),
-        onSession: (id) => setSessionId((prev) => prev ?? id),
-      });
+        onSession: (id) => {
+          rememberSession(id);
+          settleOpeningSession(id);
+        },
+      }).then(
+        (id) => {
+          if (id) rememberSession(id);
+          settleOpeningSession(id ?? sessionIdRef.current);
+          return sessionIdRef.current;
+        },
+        () => {
+          settleOpeningSession(sessionIdRef.current);
+          return sessionIdRef.current;
+        },
+      );
     },
-    [mode, scenario.id, sessionId],
+    [mode, rememberSession, scenario.id, settleOpeningSession],
   );
 
   const stopPlayback = useCallback(() => {
@@ -129,22 +161,27 @@ export function useConversation({
     setSpeakState("idle");
   }, []);
 
-  // Greet out loud the moment the room opens. Resumed sessions stay quiet —
-  // replaying an old line on arrival would be more confusing than helpful.
+  // New rooms always greet out loud — that TTS call is what mints the
+  // session. Resumed sessions stay quiet.
   useEffect(() => {
     if (greeted.current || initialSessionId) return;
     greeted.current = true;
-    if (!forceSpeak && !getAutoSpeak()) return;
     const opening = initialTurns[0];
-    if (opening?.role === "model") play(opening);
-  }, [forceSpeak, initialSessionId, initialTurns, play]);
+    if (opening?.role !== "model") return;
+
+    let resolve!: (id: string | null) => void;
+    const promise = new Promise<string | null>((r) => {
+      resolve = r;
+    });
+    openingSessionRef.current = { promise, resolve, settled: false };
+    void play(opening);
+  }, [initialSessionId, initialTurns, play]);
 
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || pending) return;
 
-      stopSpeaking();
       setError(null);
       setTurns((prev) => [
         ...prev,
@@ -153,17 +190,25 @@ export function useConversation({
       setPending(true);
 
       try {
+        let id = sessionIdRef.current;
+        if (!id && openingSessionRef.current) {
+          id = await openingSessionRef.current.promise;
+        }
+        stopSpeaking();
+
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: apiHeaders(),
           body: JSON.stringify({
             scenarioId: scenario.id,
-            sessionId,
+            sessionId: id,
             mode,
             text: trimmed,
           }),
         });
         const data = await res.json();
+
+        if (typeof data.sessionId === "string") rememberSession(data.sessionId);
 
         if (!res.ok) {
           setError(data.error ?? `發生錯誤（${res.status}）`);
@@ -172,7 +217,6 @@ export function useConversation({
         }
 
         setRejectedKey(false);
-        setSessionId(data.sessionId);
         const replyTurn: ChatTurn = {
           id: crypto.randomUUID(),
           role: "model",
@@ -194,7 +238,7 @@ export function useConversation({
         setPending(false);
       }
     },
-    [forceSpeak, mode, pending, play, scenario.id, sessionId],
+    [forceSpeak, mode, pending, play, rememberSession, scenario.id],
   );
 
   /** Replays the most recent tutor line — used by the unlock prompt. */
