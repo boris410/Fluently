@@ -98,6 +98,7 @@ export async function POST(request: Request) {
     return Response.json({
       sessionId,
       reply: result.text,
+      emotion: result.emotion,
       usage: result.usage,
       latencyMs: result.latencyMs,
       model,

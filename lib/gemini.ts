@@ -58,8 +58,26 @@ export type GeminiUsage = {
   totalTokens: number;
 };
 
+export type ReplyEmotion =
+  | "neutral"
+  | "thinking"
+  | "happy"
+  | "encouraging"
+  | "surprised"
+  | "confused";
+
+const VALID_EMOTIONS: ReplyEmotion[] = [
+  "neutral",
+  "thinking",
+  "happy",
+  "encouraging",
+  "surprised",
+  "confused",
+];
+
 export type GeminiResult = {
   text: string;
+  emotion: ReplyEmotion;
   usage: GeminiUsage;
   latencyMs: number;
 };
@@ -86,7 +104,8 @@ export function buildSystemInstruction(scenario: Scenario): string {
     "- Reply in English only, even if the learner writes in another language.",
     "- If the learner makes a mistake that would confuse a real listener, model the correct phrasing naturally in your reply instead of correcting them like a teacher.",
     "- Never break the scene to give a grammar lesson, a score, or a summary.",
-    "- Your reply is read aloud by a speech synthesiser, so write plain spoken prose: no markdown, no bullet points, no emoji, no stage directions.",
+    "- The `reply` field is read aloud by a speech synthesiser, so write plain spoken prose: no markdown, no bullet points, no emoji, no stage directions.",
+    "- For `emotion`, pick the single word that best matches the mood of your reply: neutral (default), thinking (pausing to consider), happy (pleased or amused), encouraging (supportive), surprised (unexpected answer), confused (something is unclear).",
   ].join("\n");
 }
 
@@ -140,7 +159,27 @@ export async function generateReply(options: {
           role: t.role,
           parts: [{ text: t.text }],
         })),
-        generationConfig: { temperature: 0.9, maxOutputTokens: 400 },
+        generationConfig: {
+          temperature: 0.9,
+          maxOutputTokens: 400,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              reply: {
+                type: "STRING",
+                description: "The English response text from the AI dialogue coach.",
+              },
+              emotion: {
+                type: "STRING",
+                enum: VALID_EMOTIONS,
+                description:
+                  "The emotional state corresponding to the character animation to play.",
+              },
+            },
+            required: ["reply", "emotion"],
+          },
+        },
       }),
     },
   );
@@ -178,22 +217,43 @@ export async function generateReply(options: {
     throw new GeminiError(message, res.status);
   }
 
-  const text =
+  const raw =
     body?.candidates?.[0]?.content?.parts
       ?.map((p) => p.text ?? "")
       .join("")
       .trim() ?? "";
 
-  if (!text) {
+  if (!raw) {
     const message = `模型沒有產生內容（finishReason: ${body?.candidates?.[0]?.finishReason ?? "unknown"}）`;
     log({ ok: false, output: null, error: message });
     throw new GeminiError(message, 502);
   }
 
-  log({ ok: true, output: text, error: null });
+  let text = "";
+  let emotion: ReplyEmotion = "neutral";
+  try {
+    const parsed = JSON.parse(raw) as { reply?: string; emotion?: string };
+    text = parsed.reply?.trim() ?? "";
+    const e = parsed.emotion ?? "";
+    emotion = VALID_EMOTIONS.includes(e as ReplyEmotion)
+      ? (e as ReplyEmotion)
+      : "neutral";
+  } catch {
+    // Graceful fallback: treat the whole response as the reply text.
+    text = raw;
+  }
+
+  if (!text) {
+    const message = "模型回傳的 JSON 缺少 reply 欄位";
+    log({ ok: false, output: raw, error: message });
+    throw new GeminiError(message, 502);
+  }
+
+  log({ ok: true, output: raw, error: null });
 
   return {
     text,
+    emotion,
     latencyMs,
     usage: {
       promptTokens: meta.promptTokenCount ?? 0,

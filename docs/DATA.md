@@ -51,7 +51,7 @@ api_calls
 ```sql
 api_logs                        -- 每一次對外 API 呼叫的原始紀錄
   id            INTEGER PK AUTOINCREMENT
-  platform      TEXT NOT NULL   -- 供應商，目前一律 'gemini'
+  platform      TEXT NOT NULL   -- 供應商：'gemini' / 'elevenlabs'
   endpoint      TEXT NOT NULL   -- 完整 URL（認證走標頭，所以不含 key）
   operation     TEXT NOT NULL   -- 'chat' / 'tts' / 'verify-key'
   model         TEXT            -- verify-key 沒有模型，為 NULL
@@ -196,6 +196,16 @@ Route handler（server-only）再傳 `onCall: (call) => logApiCall({ ...call, se
 驗證用 [`/api/key-check`](../app/api/key-check/route.ts)，它呼叫 `GET /v1beta/models?pageSize=1`
 ——**不花任何 token** 就能確認 key 有效。
 
+ElevenLabs 的 key **只存在** `.env.local` 的 `ELEVENLABS_API_KEY`（沒有 `NEXT_PUBLIC_` 前綴）。
+瀏覽器打 [`/api/elevenlabs`](../app/api/elevenlabs/route.ts)，由伺服器加上 `xi-api-key` 轉送給 ElevenLabs。
+預設 voice 從 `.env.local` 的 `ELEVENLABS_VOICE_ID` 讀取，程式裡不寫死。
+
+對話頁（獨白式與真實情境）預設走這條 TTS：`speakReply()` 依設定打 `/api/elevenlabs`，
+把家教回覆用角色音色唸出來，舞台畫面仍依 phase 切靜態圖。測試頁在 [`/tts`](../app/tts/page.tsx)。
+
+有 `scenarioId` 時會建／續 session，並寫 `api_calls`（`kind='tts'`，token 為 0——ElevenLabs 不回 `usageMetadata`，不估算）以及 `api_logs`（`platform='elevenlabs'`）。
+測試頁沒帶情境，只寫 `api_logs`。
+
 ---
 
 ## 5. 語音
@@ -205,17 +215,19 @@ Route handler（server-only）再傳 `onCall: (call) => logApiCall({ ...call, se
 瀏覽器內建的 `SpeechRecognition` / `webkitSpeechRecognition`，`lang: en-US`，
 **音訊不離開瀏覽器**。只有 Chromium 與 Safari 支援；不支援時介面會說明並退回打字。
 
-### 家教的聲音（TTS）— 兩種來源可切換
+### 家教的聲音（TTS）— 三種來源可切換
 
-設定面板的「家教的聲音」有兩個選項，**預設是瀏覽器語音**——先求隨開即用、
-不消耗額度，需要好音質時再自己切到 Gemini：
+設定面板的「家教的聲音」有三個選項，**預設是角色（ElevenLabs）**：
 
 | 來源 | 實作 | 成本 | 音質 |
 |---|---|---|---|
-| `browser`（預設） | `speechSynthesis` | 免費 | 機械感 |
+| `elevenlabs`（預設） | `/api/elevenlabs` → `eleven_flash_v2_5` | ElevenLabs 額度 | 角色音色 |
 | `gemini` | Gemini TTS 模型，走 `/api/speak` | 消耗音訊 token | 自然、可選音色 |
+| `browser` | `speechSynthesis` | 免費 | 機械感 |
 
-沒存過偏好時 `getVoiceSource()` 回 `browser`；只有明確存成 `gemini` 才會走 Gemini。
+沒存過偏好時 `getVoiceSource()` 回 `elevenlabs`。雲端合成失敗會退回瀏覽器語音，對話不會突然安靜。
+
+Voice Library 的音色在免費方案會回 402，畫面會說明原因並改用系統語音。音色 ID 只從 `ELEVENLABS_VOICE_ID` 讀取。
 
 **Gemini TTS 的呼叫方式**（[`synthesizeSpeech`](../lib/gemini.ts)）：
 
@@ -249,11 +261,11 @@ Route handler（server-only）再傳 `onCall: (call) => logApiCall({ ...call, se
 
 | 路徑 | 被擋時的徵狀 | 偵測方式 |
 |---|---|---|
-| Gemini（`Audio.play()`） | promise reject | `DOMException` 且 `name === "NotAllowedError"` |
+| Gemini（`Audio.play()`）／ElevenLabs | promise reject | `DOMException` 且 `name === "NotAllowedError"` |
 | 瀏覽器（`speechSynthesis`） | **無聲失敗，不會拋錯** | 900ms 後檢查 `onstart` 沒觸發且 `speaking === false` |
 
 被擋時畫面出現「🔊 點一下開啟聲音」，點一次之後同一個頁面就不會再被擋。
-**自動播放被擋不算 Gemini 失敗**，所以不會觸發退回瀏覽器語音（那同樣會被擋）。
+**自動播放被擋不算雲端 TTS 失敗**，所以不會觸發退回瀏覽器語音（那同樣會被擋）。
 
 從情境卡片點進來屬於同一個 document 的互動，通常不會被擋；
 直接貼網址或重新整理才比較容易遇到。

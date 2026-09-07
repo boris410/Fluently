@@ -5,12 +5,13 @@ import { apiHeaders, getVoiceName, getVoiceSource } from "@/lib/settings";
 /**
  * Two ways to give the tutor a voice:
  *
- *  - `gemini`  — Gemini TTS, natural sounding, costs audio tokens
- *  - `browser` — the built-in speech synthesiser, free and instant
+ *  - `elevenlabs` — character voice via `/api/elevenlabs` (default)
+ *  - `gemini`     — Gemini TTS, natural sounding, costs audio tokens
+ *  - `browser`    — the built-in speech synthesiser, free and instant
  *
- * Gemini is the default and silently falls back to the browser voice when a
- * call fails, so the conversation never goes quiet. Generated clips are
- * cached per (text, voice) so replaying a line costs nothing.
+ * Cloud voices silently fall back to the browser when a call fails, so the
+ * conversation never goes quiet. Generated clips are cached per (source,
+ * voice, text) so replaying a line costs nothing.
  */
 
 export type SpeakState = "loading" | "playing" | "idle";
@@ -151,12 +152,14 @@ function speakInBrowser(
 }
 
 async function fetchClip(options: {
+  path: "/api/speak" | "/api/elevenlabs";
   text: string;
-  voice: string;
+  voice?: string;
   scenarioId: string;
   sessionId: string | null;
+  mode?: "script" | "live";
 }): Promise<{ url: string; sessionId: string | null }> {
-  const res = await fetch("/api/speak", {
+  const res = await fetch(options.path, {
     method: "POST",
     headers: apiHeaders(),
     body: JSON.stringify({
@@ -164,6 +167,7 @@ async function fetchClip(options: {
       voice: options.voice,
       scenarioId: options.scenarioId,
       sessionId: options.sessionId,
+      mode: options.mode,
     }),
   });
 
@@ -203,8 +207,9 @@ export async function speakReply(
   options: {
     scenarioId: string;
     sessionId: string | null;
+    mode?: "script" | "live";
     onState?: (state: SpeakState) => void;
-    /** Called when Gemini failed and the browser voice took over. */
+    /** Called when cloud TTS failed and the browser voice took over. */
     onFallback?: (reason: string) => void;
     /** Called with the session the audio was booked against. */
     onSession?: (sessionId: string) => void;
@@ -218,13 +223,14 @@ export async function speakReply(
   // setting React state synchronously during that effect.
   await Promise.resolve();
 
-  if (getVoiceSource() === "browser") {
+  const source = getVoiceSource();
+  if (source === "browser") {
     speakInBrowser(text, options.onState, options.onBlocked);
     return;
   }
 
-  const voice = getVoiceName();
-  const cacheKey = `${voice}::${text}`;
+  const voice = source === "elevenlabs" ? "elevenlabs" : getVoiceName();
+  const cacheKey = `${source}::${voice}::${text}`;
   const cached = clipCache.get(cacheKey);
 
   if (cached) {
@@ -245,10 +251,12 @@ export async function speakReply(
   options.onState?.("loading");
   try {
     const clip = await fetchClip({
+      path: source === "elevenlabs" ? "/api/elevenlabs" : "/api/speak",
       text,
-      voice,
+      voice: source === "gemini" ? voice : undefined,
       scenarioId: options.scenarioId,
       sessionId: options.sessionId,
+      mode: options.mode,
     });
     clipCache.set(cacheKey, clip.url);
     if (clip.sessionId) options.onSession?.(clip.sessionId);
@@ -256,7 +264,7 @@ export async function speakReply(
   } catch (error) {
     options.onState?.("idle");
 
-    // A blocked autoplay is not a Gemini failure — the clip is fine, the
+    // A blocked autoplay is not a TTS failure — the clip is fine, the
     // page just has not been interacted with yet. Falling back to the
     // browser voice would be blocked too.
     if (isAutoplayBlocked(error)) {

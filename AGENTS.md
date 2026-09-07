@@ -48,6 +48,7 @@ Gemini 串接方式、API key 流向、token 與來回次數的計算來源，�
   **`lib/gemini.ts` 不可 import `node:sqlite`**（它會被 client 端 import）。
 - 新增依賴新欄位的索引時，要放進 `migrate()`，不能放 `SCHEMA` 字串（舊資料庫會爆）。
 - API key 只走 localStorage → 請求標頭，**永遠不要寫進資料庫或 log**。
+- 角色舞台素材路徑（靜態圖與影片）只寫在 `lib/scene-clips.ts`，其他檔案一律透過 `resolveClip()` 取得。
 - 改 schema 或改串接方式時，同一個 commit 內更新 `docs/DATA.md`。
 
 資料庫需要 Node 22+（用內建 `node:sqlite`）。`ExperimentalWarning` 是預期輸出。

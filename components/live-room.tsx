@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { SceneStage } from "@/components/scene-stage";
 import type { Scenario } from "@/lib/scenarios";
+import type { ScenePhase } from "@/lib/scene-clips";
 import { canListen, listen, stopSpeaking } from "@/lib/speech";
 import {
   type ChatTurn,
@@ -20,16 +22,8 @@ import {
 /** Stop retrying after this many turns where nothing was heard. */
 const SILENT_LIMIT = 3;
 
-type Phase =
-  | "warming"
-  | "speaking"
-  | "thinking"
-  | "listening"
-  | "paused"
-  | "stalled";
-
-const PHASE_LABEL: Record<Phase, string> = {
-  warming: "準備中…",
+const PHASE_LABEL: Record<ScenePhase, string> = {
+  warming: "歡迎光臨…",
   speaking: "家教說話中…",
   thinking: "思考中…",
   listening: "換你說…",
@@ -73,6 +67,7 @@ export function LiveRoom({
   });
 
   const {
+    turns,
     sessionId,
     stats,
     pending,
@@ -190,12 +185,18 @@ export function LiveRoom({
     );
   }, [router, scenario.id, sessionId, stopListening]);
 
-  const phase: Phase = paused
+  // Opening line is the "customer just walked in" beat — keep the waving
+  // still on screen while she greets, instead of swapping to the talking pose.
+  const greeting = turns.length === 1 && turns[0]?.role === "model";
+
+  const phase: ScenePhase = paused
     ? "paused"
     : pending
       ? "thinking"
       : speakState !== "idle"
-        ? "speaking"
+        ? greeting
+          ? "warming"
+          : "speaking"
         : listening
           ? "listening"
           : stalled
@@ -204,10 +205,24 @@ export function LiveRoom({
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-5 py-10 sm:px-8">
-      <div className="flex w-full max-w-md flex-col items-center text-center">
-        <Orb scenario={scenario} phase={phase} />
+      <div className="flex w-full max-w-sm flex-col items-center text-center">
+        <div className="w-full max-w-[340px]">
+          <SceneStage scenario={scenario} phase={phase} />
+        </div>
 
-        <p className="mt-8 text-[17px] text-ink">{PHASE_LABEL[phase]}</p>
+        <p className="mt-7 flex items-center gap-2 text-[17px] text-ink">
+          <span
+            aria-hidden
+            className={`h-2 w-2 rounded-full ${
+              phase === "listening"
+                ? "bg-clay ripple"
+                : phase === "speaking"
+                  ? "bg-clay"
+                  : "bg-line-strong"
+            }`}
+          />
+          {PHASE_LABEL[phase]}
+        </p>
         <p className="mt-2 text-[13px] text-ink-muted">
           {scenario.titleZh} · 來回 {stats.calls}
         </p>
@@ -285,43 +300,6 @@ export function LiveRoom({
           結束後可以回頭看剛才實際講了什麼。
         </p>
       </div>
-    </div>
-  );
-}
-
-/** The single visual anchor: scenario emoji with a ring that reacts to phase. */
-function Orb({ scenario, phase }: { scenario: Scenario; phase: Phase }) {
-  const active = phase === "speaking" || phase === "listening";
-
-  return (
-    <div className="relative flex h-44 w-44 items-center justify-center">
-      <span
-        aria-hidden
-        className={`absolute inset-0 rounded-full border-2 ${
-          phase === "listening"
-            ? "border-clay"
-            : phase === "speaking"
-              ? "border-clay/60"
-              : "border-line"
-        } ${active ? "ripple" : ""}`}
-      />
-      <span
-        aria-hidden
-        className={`absolute inset-4 rounded-full border ${
-          active ? "border-clay/30" : "border-line"
-        }`}
-      />
-      <span
-        className="tinted flex h-28 w-28 items-center justify-center rounded-full text-[44px]"
-        style={
-          {
-            "--tint-light": scenario.tint[0],
-            "--tint-dark": scenario.tint[1],
-          } as React.CSSProperties
-        }
-      >
-        {scenario.emoji}
-      </span>
     </div>
   );
 }

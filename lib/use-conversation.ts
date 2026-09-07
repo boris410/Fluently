@@ -103,6 +103,7 @@ export function useConversation({
       void speakReply(turn.text, {
         scenarioId: scenario.id,
         sessionId: sessionOverride ?? sessionId,
+        mode,
         onState: (state) => {
           setSpeakState(state);
           setSpeakingId(state === "idle" ? null : turn.id);
@@ -114,12 +115,12 @@ export function useConversation({
           }
         },
         onFallback: (reason) =>
-          setVoiceNotice(`Gemini 語音沒出來，已改用瀏覽器語音。（${reason}）`),
+          setVoiceNotice(`角色語音沒出來，已改用瀏覽器語音。（${reason}）`),
         onBlocked: () => setNeedsGesture(true),
         onSession: (id) => setSessionId((prev) => prev ?? id),
       });
     },
-    [scenario.id, sessionId],
+    [mode, scenario.id, sessionId],
   );
 
   const stopPlayback = useCallback(() => {

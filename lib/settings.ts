@@ -16,7 +16,7 @@ export const KEYS = {
 } as const;
 
 /** Where the tutor's voice comes from. */
-export type VoiceSource = "gemini" | "browser";
+export type VoiceSource = "gemini" | "browser" | "elevenlabs";
 
 function read(key: string): string | null {
   if (typeof window === "undefined") return null;
@@ -66,9 +66,14 @@ export const setAutoSpeak = (on: boolean) => {
   notify();
 };
 
-/** Browser speech is the default: instant, free, and always available. */
-export const getVoiceSource = (): VoiceSource =>
-  read(KEYS.voiceSource) === "gemini" ? "gemini" : "browser";
+/** ElevenLabs is the default so the cafe character voice is used in-room. */
+export const getVoiceSource = (): VoiceSource => {
+  const stored = read(KEYS.voiceSource);
+  if (stored === "gemini" || stored === "elevenlabs" || stored === "browser") {
+    return stored;
+  }
+  return "elevenlabs";
+};
 export const setVoiceSource = (source: VoiceSource) => {
   write(KEYS.voiceSource, source);
   notify();

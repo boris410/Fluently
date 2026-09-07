@@ -169,19 +169,31 @@ type Scenario = {
 | 欄位 | 首頁 `/` | 選擇頁 `/scenarios` | 獨白式對話 | 真實情境 |
 |---|---|---|---|---|
 | `id` | 快捷 chip 的連結 | 卡片連結 | 路由參數 | 路由參數 |
-| `emoji` | 快捷 chip | 卡片圖示方塊 | header 圖示方塊 | **中央 Orb 的主視覺** |
+| `emoji` | 快捷 chip | 卡片圖示方塊 | header 圖示方塊 | 沒有舞台素材時的畫面 |
 | `title` | — | 卡片標題（`font-display`） | header 標題、metadata | header 標題 |
-| `titleZh` | 快捷 chip | 卡片副標 | header 副標 | Orb 下方的說明 |
+| `titleZh` | 快捷 chip | 卡片副標 | header 副標 | 舞台下方的說明 |
 | `blurb` | — | 卡片內文 | 對話開始前的置中提示 | 模式選擇畫面的提示 |
 | `level` | — | 難度篩選 + badge | header 副標 | — |
 | `focus` | — | 卡片底部標籤 | 頁面底部標籤 | —（不顯示文字） |
 | `opening` | — | — | **家教的第一則訊息** | **自動唸出的開場白** |
-| `tint` | — | 圖示方塊底色 | 圖示方塊底色 | Orb 底色 |
+| `tint` | — | 圖示方塊底色 | 圖示方塊底色 | 無舞台素材時的底色 |
 
 首頁只取前 4 個情境（`scenarios.slice(0, 4)`）當快捷 chip，**順序即優先序**。
 
 對話頁有兩種模式，由 `?mode=` 決定（`script` 獨白式 / `live` 真實情境）；
 沒帶 `mode` 且不是續接舊對話時，先顯示模式選擇畫面。
+
+真實情境模式的角色素材在 [`lib/scene-clips.ts`](../lib/scene-clips.ts) 登記。
+目前只有 `cafe` 有靜態圖，用來先把對話循環跑過一次：
+
+| phase | 靜態圖 | 畫面 |
+|---|---|---|
+| `warming`（客人進門、開場白） | `scenario_d.jpeg` | 揮手歡迎 |
+| `listening` / `speaking` | `scenario_a.jpeg` | 面向客人微笑 |
+| `thinking` | `scenario_c.jpeg` | 托腮思索 |
+| 結帳（尚未接上 phase） | `scenario_b.png` | 手按收銀機 |
+
+其餘情境會退回情境 emoji，版面不會因此跳動。影片規格與待辦見 [`SCENARIOS_Vedio.md`](SCENARIOS_Vedio.md)。
 
 ---
 

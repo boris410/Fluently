@@ -141,7 +141,7 @@
 | `.glow` | 緩慢呼吸縮放 7s | Hero 背後的色暈 |
 | `.caret` | 游標閃爍 | 打字動畫的游標 |
 | `.pop` | 下拉淡入 0.18s | 彈出面板（設定選單） |
-| `.ripple` | 環狀脈動 2.4s | 真實情境模式的說話／聆聽指示環 |
+| `.ripple` | 環狀脈動 2.4s | 真實情境模式「換你說」的狀態圓點 |
 
 `.glow` 另外被借用在對話的「思考中」三點指示器上（三個點各給不同 `animation-delay`）。
 
@@ -196,22 +196,29 @@ className="rounded-md bg-surface-2 px-2 py-1 text-[12px] text-ink-muted"   // �
 摘要列的 meta（時間、狀態碼、耗時）一律 `font-mono text-[12px] text-ink-muted`，
 錯誤狀態才加 `bg-clay-wash text-clay`。
 
-**真實情境模式的中央 Orb**
+**真實情境模式的舞台**
 
-沒有字幕的沉浸模式只有一個視覺錨點：情境 emoji 放在圓形內，外面兩圈環表達狀態。
+沉浸模式的視覺是一個直式舞台（原本的圓形 Orb 已移除——素材是 880×1072 直式，
+塞進圓框只會把櫃檯與雙手裁掉）。靜態圖與影片共用同一套外框與切換方式。
 
 ```tsx
-// 外環：聆聽時 border-clay，家教說話時 border-clay/60，其餘 border-line
-// 說話或聆聽中才加 .ripple
-className="absolute inset-0 rounded-full border-2 border-clay ripple"
-// 內圈裝飾
-className="absolute inset-4 rounded-full border border-clay/30"
-// 中心：沿用情境卡片同一套 .tinted + --tint-light/--tint-dark
-className="tinted flex h-28 w-28 items-center justify-center rounded-full text-[44px]"
+// 舞台外框：比例鎖死在素材的原生比例
+className="relative w-full overflow-hidden rounded-3xl border border-line bg-canvas-deep shadow-[var(--shadow)]"
+style={{ aspectRatio: "880 / 1072" }}
+// 內層靜態圖（next/image fill）或影片
+className="absolute inset-0 h-full w-full object-cover transition-opacity duration-300"
 ```
 
-狀態文字放在 Orb 下方 `text-[17px] text-ink`，次要資訊 `text-[13px] text-ink-muted`。
-**這個模式不顯示任何對話文字，也不顯示 token 數字**——只留來回計數。
+外層容器 `max-w-[340px]`，避免在桌機上整頁被一張直式畫面佔滿。
+
+**切換靠疊層改透明度，不要換 `src`。** 換 `src` 每次都會閃一格。
+所有 ready 的素材一次掛好、疊在一起；影片只有當前那支在播，其餘 `pause()` 停在最後一格。
+`cafe` 目前先走靜態圖把對話循環跑過一次，影片之後再接。
+
+狀態文字在舞台下方 `text-[17px] text-ink`（前面帶一個 `h-2 w-2` 的狀態圓點），
+次要資訊 `text-[13px] text-ink-muted`。**這個模式不顯示任何對話文字，也不顯示 token 數字。**
+
+沒有舞台素材的情境會用同一個外框顯示情境 emoji + tint，**版面不會因為有沒有素材而跳動**。
 
 **對話氣泡**
 
@@ -277,12 +284,18 @@ className="flex-1 rounded-md px-2 py-1.5 text-[13px] text-ink-soft transition-co
 | [`lib/scenarios.ts`](../lib/scenarios.ts) | 情境資料，含每個情境的 `tint` |
 | [`lib/theme.ts`](../lib/theme.ts) | 主題型別、`localStorage` key、`applyTheme()` |
 | [`lib/devtools.ts`](../lib/devtools.ts) | Next.js DevTools dev-server 端點的用戶端（**僅開發模式**） |
-| [`components/settings-menu.tsx`](../components/settings-menu.tsx) | 設定選單：外觀切換 + DevTools 指示器控制 |
+| [`components/settings-menu.tsx`](../components/settings-menu.tsx) | 設定選單：外觀、家教聲音（角色／Gemini／系統）、DevTools |
 | [`app/api/devtools-config/route.ts`](../app/api/devtools-config/route.ts) | 讀取 DevTools 設定檔的 dev-only route handler |
 | [`components/chat-room.tsx`](../components/chat-room.tsx) | 對話介面：訊息氣泡、語音、每回合 token |
 | [`app/usage/page.tsx`](../app/usage/page.tsx) | 用量統計頁：stat tile、長條圖、表格 |
 | [`app/logs/page.tsx`](../app/logs/page.tsx) | API 紀錄頁：篩選 pill、`<details>` 展開列、分頁 |
-| [`components/live-room.tsx`](../components/live-room.tsx) | 真實情境模式：Orb、狀態文字、免持迴圈 |
+| [`app/tts/page.tsx`](../app/tts/page.tsx) | ElevenLabs TTS 測試頁 |
+| [`components/elevenlabs-tts-tester.tsx`](../components/elevenlabs-tts-tester.tsx) | TTS 測試表單：句子、voice id、播放 |
+| [`lib/elevenlabs.ts`](../lib/elevenlabs.ts) | ElevenLabs TTS 客戶端（`onCall` 記 log，不碰資料庫） |
+| [`app/api/elevenlabs/route.ts`](../app/api/elevenlabs/route.ts) | 伺服器轉發 ElevenLabs，key 不進瀏覽器 |
+| [`components/live-room.tsx`](../components/live-room.tsx) | 真實情境模式：舞台、狀態文字、免持迴圈 |
+| [`components/scene-stage.tsx`](../components/scene-stage.tsx) | 直式舞台，依 phase 疊層切換靜態圖／影片 |
+| [`lib/scene-clips.ts`](../lib/scene-clips.ts) | 靜態圖與影片清單、fallback 鏈（**唯一寫路徑的地方**） |
 | [`components/mode-picker.tsx`](../components/mode-picker.tsx) | 進入對話前的模式選擇畫面 |
 | [`lib/use-conversation.ts`](../lib/use-conversation.ts) | 兩個模式共用的對話狀態與語音控制 |
 

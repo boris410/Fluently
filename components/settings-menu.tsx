@@ -46,7 +46,8 @@ export function SettingsMenu() {
   >("idle");
   const [keyMessage, setKeyMessage] = useState("");
   const [autoSpeak, setAutoSpeakState] = useState(true);
-  const [voiceSource, setVoiceSourceState] = useState<VoiceSource>("browser");
+  const [voiceSource, setVoiceSourceState] =
+    useState<VoiceSource>("elevenlabs");
   const [voiceName, setVoiceNameState] = useState(VOICES[0].id);
   const wrapRef = useRef<HTMLDivElement>(null);
 
@@ -214,8 +215,9 @@ export function SettingsMenu() {
           <Section label="家教的聲音">
             <Segmented
               options={[
-                { id: "browser", label: "瀏覽器語音" },
-                { id: "gemini", label: "Gemini 語音" },
+                { id: "elevenlabs", label: "角色" },
+                { id: "gemini", label: "Gemini" },
+                { id: "browser", label: "系統" },
               ]}
               value={voiceSource}
               onSelect={(id) => {
@@ -245,9 +247,13 @@ export function SettingsMenu() {
                   失敗時自動退回瀏覽器語音。
                 </p>
               </>
+            ) : voiceSource === "elevenlabs" ? (
+              <p className="mt-2 text-[12px] leading-5 text-ink-muted">
+                角色音色走 ElevenLabs（.env 的 voice）。同一句重播不會再合成，失敗時退回瀏覽器語音。
+              </p>
             ) : (
               <p className="mt-2 text-[12px] leading-5 text-ink-muted">
-                預設。使用系統內建語音：免費、即時、不耗額度，但聽起來比較機械。
+                使用系統內建語音：免費、即時、不耗額度，但聽起來比較機械。
               </p>
             )}
 
@@ -304,6 +310,14 @@ export function SettingsMenu() {
             className="flex items-center justify-between rounded-lg px-1 py-2 text-[13px] text-ink-soft transition-colors hover:text-ink"
           >
             API 呼叫紀錄
+            <span aria-hidden>→</span>
+          </Link>
+          <Link
+            href="/tts"
+            onClick={() => setOpen(false)}
+            className="flex items-center justify-between rounded-lg px-1 py-2 text-[13px] text-ink-soft transition-colors hover:text-ink"
+          >
+            ElevenLabs TTS 測試
             <span aria-hidden>→</span>
           </Link>
 
