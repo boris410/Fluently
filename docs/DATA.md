@@ -16,87 +16,136 @@
 
 ### Schema
 
-```sql
-user_students               -- 學習者（本機可切換；尚無登入）
-  id           TEXT PK      -- seed 預設 'default'
-  name         TEXT
-  created_at / updated_at
-
-scenes                      -- 場景：咖啡店 / 街頭 / 職場…
-  id, title, title_zh, emoji, tint_light, tint_dark
-
-scenarios                   -- 對話情境：點咖啡 / 面試…（路由 /chat/[id] 的 id）
-  id           TEXT PK      -- 維持 'cafe' 等公開 id，不可改
-  scene_id     → scenes(id)
-  title, title_zh, blurb, level, focus (JSON), opening, sort_order
-
-roles                       -- 情境裡的職位（櫃檯、路人…）
-  id           TEXT PK      -- '{scenarioId}-tutor'
-  scenario_id  → scenarios(id)
-  character_id → characters(id)
-  title, persona            -- persona 餵給 Gemini
-
-characters                  -- 系統裡的人（Bella、Andy）
-  id, name
-  elevenlabs_voice_id → elevenlabs_voices(id)
-
-elevenlabs_voices
-  id, voice_id (ElevenLabs), label
-  -- seed 時從 ELEVENLABS_VOICE_ID 寫入；沒有再退回 env
-
-sessions
-  id           TEXT PK
-  scenario_id  TEXT NOT NULL          -- → scenarios(id)
-  user_student_id TEXT                -- → user_students
-  role_id      TEXT                   -- 這場 AI 演哪個 role
-  mode         TEXT DEFAULT 'script'
-  created_at / updated_at
-
-messages
-  id           INTEGER PK AUTOINCREMENT
-  session_id   → sessions(id) ON DELETE CASCADE
-  role         TEXT CHECK (role IN ('user','model'))
-  user_student_id  TEXT   -- 學習者說話時有值
-  character_id     TEXT   -- 家教說話時有值
-  content, created_at
-
-api_calls                       -- 用量帳：一列 = 一次計費呼叫
-  id             INTEGER PK AUTOINCREMENT
-  session_id     → sessions(id) ON DELETE CASCADE
-  kind           TEXT DEFAULT 'chat'  -- 'chat' / 'tts'
-  model          TEXT
-  prompt_tokens / output_tokens / thought_tokens / total_tokens
-  latency_ms, ok, error, created_at
-  -- 情境從 session→scenario 推；音色從 session→role→character→elevenlabs_voices 推
-  -- 舊庫可能仍有 scenario_id / voice 欄，新寫入不再當成來源
-```
+可整段貼進 SQLite 查詢工具建表。`--` 是欄位註記。
 
 ```sql
-api_logs                        -- 每一次對外 API 呼叫的原始紀錄
-  id            INTEGER PK AUTOINCREMENT
-  platform      TEXT NOT NULL   -- 供應商：'gemini' / 'elevenlabs'
-  endpoint      TEXT NOT NULL   -- 完整 URL（認證走標頭，所以不含 key）
-  operation     TEXT NOT NULL   -- 'chat' / 'tts' / 'verify-key'
-  model         TEXT            -- verify-key 沒有模型，為 NULL
-  detail        TEXT            -- 額外參數，例如 'voice=Kore'
-  session_id    TEXT            -- 關聯用，刻意不加外鍵
-  user_student_id TEXT          -- 可空，不加外鍵
-  input         TEXT            -- 送出的內容（超過 4000 字截斷）
-  output        TEXT            -- 收到的內容；語音記成 '[audio] 24000Hz…1.8s'
-  input_tokens  INTEGER
-  output_tokens INTEGER
-  total_tokens  INTEGER
-  status        INTEGER NOT NULL   -- HTTP 狀態碼
-  ok            INTEGER NOT NULL
-  error         TEXT
-  requested_at  INTEGER NOT NULL   -- 送出時間 epoch ms
-  returned_at   INTEGER NOT NULL   -- 收到時間 epoch ms
-  duration_ms   INTEGER NOT NULL
-```
+PRAGMA foreign_keys = ON;
 
-索引：`messages(session_id, id)`、`api_calls(session_id)`、`api_calls(created_at)`、
-`api_calls(kind)`、`api_logs(requested_at)`、`api_logs(operation)`、
-`sessions(user_student_id)`、`scenarios(scene_id)`、`roles(scenario_id)`。
+-- 學習者（本機可切換；尚無登入）
+CREATE TABLE IF NOT EXISTS user_students (
+  id         TEXT PRIMARY KEY, -- 學習者 id；seed 預設 'default'
+  name       TEXT NOT NULL,    -- 顯示名稱，例如 Learner
+  created_at INTEGER NOT NULL, -- 建立時間 epoch ms
+  updated_at INTEGER NOT NULL  -- 最後更新 epoch ms
+);
+
+-- 場景：咖啡店 / 街頭 / 職場 / 酒吧 / 公園
+CREATE TABLE IF NOT EXISTS scenes (
+  id         TEXT PRIMARY KEY, -- 場景 id，例如 cafe、workplace
+  title      TEXT NOT NULL,    -- 英文名，例如 Cafe
+  title_zh   TEXT NOT NULL,    -- 中文名，例如 咖啡店
+  emoji      TEXT NOT NULL,    -- 卡片圖示
+  tint_light TEXT NOT NULL,    -- 淺色模式底色
+  tint_dark  TEXT NOT NULL     -- 深色模式底色
+);
+
+-- ElevenLabs 音色庫；seed 從 ELEVENLABS_VOICE_ID 寫入，沒有再退回 env
+CREATE TABLE IF NOT EXISTS elevenlabs_voices (
+  id       TEXT PRIMARY KEY, -- 內部 id，seed 預設 'default'
+  voice_id TEXT NOT NULL,    -- ElevenLabs 平台的 voice id
+  label    TEXT NOT NULL     -- 給人看的名稱
+);
+
+-- 系統裡的人物，例如 Bella、Andy
+CREATE TABLE IF NOT EXISTS characters (
+  id                  TEXT PRIMARY KEY, -- 人物 id，例如 bella
+  name                TEXT NOT NULL,    -- 顯示名
+  elevenlabs_voice_id TEXT NOT NULL REFERENCES elevenlabs_voices(id) -- 使用哪顆音色
+);
+
+-- 對話情境：點咖啡 / 面試…；id 即路由 /chat/[id]，公開後不可改
+CREATE TABLE IF NOT EXISTS scenarios (
+  id         TEXT PRIMARY KEY, -- 情境 id，例如 cafe
+  scene_id   TEXT NOT NULL REFERENCES scenes(id), -- 所屬場景
+  title      TEXT NOT NULL,    -- 英文情境名，例如 Ordering Coffee
+  title_zh   TEXT NOT NULL,    -- 中文情境名，例如 咖啡廳點餐
+  blurb      TEXT NOT NULL,    -- 一句話描述「你會遇到什麼」
+  level      TEXT NOT NULL,    -- beginner / intermediate / advanced
+  focus      TEXT NOT NULL,    -- 語言重點，JSON 陣列字串
+  opening    TEXT NOT NULL,    -- 家教開場白（英文）
+  sort_order INTEGER NOT NULL DEFAULT 0 -- 列表排序，數字越小越前
+);
+
+-- 情境裡的職位：櫃檯 / 路人 / 面試官
+CREATE TABLE IF NOT EXISTS roles (
+  id           TEXT PRIMARY KEY, -- '{scenarioId}-tutor'
+  scenario_id  TEXT NOT NULL REFERENCES scenarios(id), -- 所屬情境
+  character_id TEXT NOT NULL REFERENCES characters(id), -- 由哪個人物扮演
+  title        TEXT NOT NULL,    -- 職位短名，例如 櫃檯
+  persona      TEXT NOT NULL     -- 英文人設，餵給 Gemini system instruction
+);
+
+-- 一次練習對話
+CREATE TABLE IF NOT EXISTS sessions (
+  id               TEXT PRIMARY KEY, -- crypto.randomUUID()
+  scenario_id      TEXT NOT NULL,    -- 對應 scenarios.id（程式關聯，schema 未加 FK）
+  user_student_id  TEXT,             -- 哪位學習者；對應 user_students.id
+  role_id          TEXT,             -- 這場 AI 演哪個職位；對應 roles.id
+  mode             TEXT NOT NULL DEFAULT 'script', -- script 獨白式 / live 真實情境
+  created_at       INTEGER NOT NULL, -- 開始時間 epoch ms
+  updated_at       INTEGER NOT NULL  -- 最後一則訊息時間 epoch ms
+);
+
+-- 對話記憶；每次呼叫 Gemini 會重送這段歷史
+CREATE TABLE IF NOT EXISTS messages (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id       TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, -- 所屬練習
+  role             TEXT NOT NULL CHECK (role IN ('user', 'model')), -- user 學習者 / model 家教
+  user_student_id  TEXT,             -- 學習者說話時有值
+  character_id     TEXT,             -- 家教說話時有值
+  content          TEXT NOT NULL,    -- 訊息正文
+  created_at       INTEGER NOT NULL  -- epoch ms
+);
+
+-- 用量帳：一列 = 一次計費呼叫。情境/音色從 session 關聯推，不寫在這張表
+CREATE TABLE IF NOT EXISTS api_calls (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, -- 記在哪段練習
+  kind           TEXT NOT NULL DEFAULT 'chat', -- chat 對話 / tts 語音；來回次數只數 chat
+  model          TEXT NOT NULL,    -- 實際呼叫的模型 id
+  prompt_tokens  INTEGER NOT NULL DEFAULT 0, -- Gemini promptTokenCount；TTS 常為 0
+  output_tokens  INTEGER NOT NULL DEFAULT 0, -- candidatesTokenCount
+  thought_tokens INTEGER NOT NULL DEFAULT 0, -- thoughtsTokenCount；思考模型才有
+  total_tokens   INTEGER NOT NULL DEFAULT 0, -- totalTokenCount；不自己估算
+  latency_ms     INTEGER NOT NULL DEFAULT 0, -- 這次呼叫耗時
+  ok             INTEGER NOT NULL DEFAULT 1, -- 1 成功 / 0 失敗；失敗也要記
+  error          TEXT,             -- 失敗時的錯誤訊息
+  created_at     INTEGER NOT NULL  -- epoch ms
+);
+
+-- 原始呼叫紀錄（除錯）；寫入失敗不可拖垮請求，故 session 不加 FK
+CREATE TABLE IF NOT EXISTS api_logs (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  platform         TEXT NOT NULL,    -- gemini / elevenlabs
+  endpoint         TEXT NOT NULL,    -- 完整 URL，不含 API key
+  operation        TEXT NOT NULL,    -- chat / tts / verify-key
+  model            TEXT,             -- 模型；verify-key 為 NULL
+  detail           TEXT,             -- 額外參數，例如 voice=Kore
+  session_id       TEXT,             -- 關聯練習，刻意不加外鍵
+  user_student_id  TEXT,             -- 關聯學習者，可空、不加外鍵
+  input            TEXT,             -- 送出內容；超過 4000 字截斷
+  output           TEXT,             -- 收到內容；語音常記成 [audio] …
+  input_tokens     INTEGER NOT NULL DEFAULT 0, -- 這次呼叫的輸入 token
+  output_tokens    INTEGER NOT NULL DEFAULT 0, -- 輸出 token
+  total_tokens     INTEGER NOT NULL DEFAULT 0, -- 總 token
+  status           INTEGER NOT NULL DEFAULT 0, -- HTTP 狀態碼
+  ok               INTEGER NOT NULL DEFAULT 0, -- 1 成功 / 0 失敗
+  error            TEXT,             -- 錯誤文字
+  requested_at     INTEGER NOT NULL, -- 送出時間 epoch ms
+  returned_at      INTEGER NOT NULL, -- 收到時間 epoch ms
+  duration_ms      INTEGER NOT NULL DEFAULT 0 -- 來回耗時
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_calls_session ON api_calls(session_id);
+CREATE INDEX IF NOT EXISTS idx_calls_created ON api_calls(created_at);
+CREATE INDEX IF NOT EXISTS idx_calls_kind ON api_calls(kind);
+CREATE INDEX IF NOT EXISTS idx_logs_requested ON api_logs(requested_at);
+CREATE INDEX IF NOT EXISTS idx_logs_operation ON api_logs(operation);
+CREATE INDEX IF NOT EXISTS idx_scenarios_scene ON scenarios(scene_id);
+CREATE INDEX IF NOT EXISTS idx_roles_scenario ON roles(scenario_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_student ON sessions(user_student_id);
+```
 
 ### 遷移與種子
 
