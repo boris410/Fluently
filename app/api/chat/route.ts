@@ -42,7 +42,9 @@ export async function POST(request: Request) {
     return Response.json({ error: "請求格式錯誤" }, { status: 400 });
   }
 
-  const scenario = body.scenarioId ? getScenario(body.scenarioId) : undefined;
+  const scenario = body.scenarioId
+    ? await getScenario(body.scenarioId)
+    : undefined;
   const text = body.text?.trim();
 
   if (!scenario) {
@@ -57,17 +59,17 @@ export async function POST(request: Request) {
   // Resume the session when the client already has one, otherwise start a
   // new one seeded with the scenario's opening line so the model sees it.
   let sessionId = body.sessionId;
-  if (!sessionId || !sessionExists(sessionId)) {
-    sessionId = createSession(
+  if (!sessionId || !(await sessionExists(sessionId))) {
+    sessionId = await createSession(
       scenario.id,
       body.mode === "live" ? "live" : "script",
     );
-    appendMessage(sessionId, "model", scenario.opening);
+    await appendMessage(sessionId, "model", scenario.opening);
   }
 
-  appendMessage(sessionId, "user", text);
+  await appendMessage(sessionId, "user", text);
 
-  const turns = getHistory(sessionId).map((m) => ({
+  const turns = (await getHistory(sessionId)).map((m) => ({
     role: m.role,
     text: m.content,
   }));
@@ -81,8 +83,8 @@ export async function POST(request: Request) {
       onCall: (call) => logApiCall({ ...call, sessionId }),
     });
 
-    appendMessage(sessionId, "model", result.text);
-    recordCall({
+    await appendMessage(sessionId, "model", result.text);
+    await recordCall({
       sessionId,
       kind: "chat",
       model,
@@ -113,7 +115,7 @@ export async function POST(request: Request) {
 
     // Failed round trips are still round trips — record them so the usage
     // page shows the real error rate.
-    recordCall({
+    await recordCall({
       sessionId,
       kind: "chat",
       model,

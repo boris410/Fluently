@@ -1,6 +1,7 @@
 import {
   appendMessage,
   createSession,
+  defaultVoiceId,
   getScenario,
   logApiCall,
   recordCall,
@@ -11,7 +12,6 @@ import {
   DEFAULT_ELEVENLABS_MODEL,
   ELEVENLABS_MODELS,
   ElevenLabsError,
-  readElevenLabsVoiceId,
   synthesizeElevenLabs,
 } from "@/lib/elevenlabs";
 
@@ -60,24 +60,26 @@ export async function POST(request: Request) {
     return Response.json({ error: "沒有要唸的內容" }, { status: 400 });
   }
 
-  const scenario = body.scenarioId ? getScenario(body.scenarioId) : undefined;
+  const scenario = body.scenarioId
+    ? await getScenario(body.scenarioId)
+    : undefined;
   let sessionId = body.sessionId ?? null;
   if (scenario) {
-    if (!sessionId || !sessionExists(sessionId)) {
-      sessionId = createSession(
+    if (!sessionId || !(await sessionExists(sessionId))) {
+      sessionId = await createSession(
         scenario.id,
         body.mode === "live" ? "live" : "script",
       );
-      appendMessage(sessionId, "model", scenario.opening);
+      await appendMessage(sessionId, "model", scenario.opening);
     }
   }
 
   const voiceId =
-    (sessionId ? resolveSessionVoiceId(sessionId) : null) ??
-    readElevenLabsVoiceId();
+    (sessionId ? await resolveSessionVoiceId(sessionId) : null) ??
+    (await defaultVoiceId());
   if (!voiceId) {
     return Response.json(
-      { error: "還沒有音色。在 .env.local 設 ELEVENLABS_VOICE_ID。" },
+      { error: "還沒有音色。elevenlabs_voices 表裡沒有任何聲音。" },
       { status: 400 },
     );
   }
@@ -97,7 +99,7 @@ export async function POST(request: Request) {
     });
 
     if (scenario && sessionId) {
-      recordCall({
+      await recordCall({
         sessionId,
         kind: "tts",
         model,
@@ -127,7 +129,7 @@ export async function POST(request: Request) {
     const message = userFacingError(raw, status);
 
     if (scenario && sessionId) {
-      recordCall({
+      await recordCall({
         sessionId,
         kind: "tts",
         model,

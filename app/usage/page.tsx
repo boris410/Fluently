@@ -22,16 +22,33 @@ export const dynamic = "force-dynamic";
 
 const DAYS = 14;
 
-export default function UsagePage() {
-  const totals = getTotals();
-  const chat = getTotals("chat");
-  const tts = getTotals("tts");
-  const byScenario = getUsageByScenario();
-  const sessions = getRecentSessions();
-  const logCount = countLogs({});
-  const logSummary = getLogSummary();
-  const daily = fillDays(getDailyUsage(DAYS), DAYS);
+export default async function UsagePage() {
+  const [totals, chat, tts, byScenario, sessions, logCount, logSummary, dailyRaw] =
+    await Promise.all([
+      getTotals(),
+      getTotals("chat"),
+      getTotals("tts"),
+      getUsageByScenario(),
+      getRecentSessions(),
+      countLogs({}),
+      getLogSummary(),
+      getDailyUsage(DAYS),
+    ]);
+  const daily = fillDays(dailyRaw, DAYS);
   const peak = Math.max(...daily.map((d) => d.total_tokens), 1);
+
+  // Resolve scenario metadata (emoji/title) for the ids referenced above.
+  const scenarioIds = Array.from(
+    new Set([
+      ...byScenario.map((r) => r.scenario_id),
+      ...sessions.map((s) => s.scenario_id),
+    ]),
+  );
+  const scenarioById = new Map(
+    (await Promise.all(scenarioIds.map((id) => getScenario(id)))).flatMap((s) =>
+      s ? [[s.id, s] as const] : [],
+    ),
+  );
 
   return (
     <>
@@ -174,7 +191,7 @@ export default function UsagePage() {
                     </thead>
                     <tbody>
                       {byScenario.map((row) => {
-                        const scenario = getScenario(row.scenario_id);
+                        const scenario = scenarioById.get(row.scenario_id);
                         return (
                           <tr
                             key={row.scenario_id}
@@ -219,7 +236,7 @@ export default function UsagePage() {
                 </p>
                 <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {sessions.map((s) => {
-                    const scenario = getScenario(s.scenario_id);
+                    const scenario = scenarioById.get(s.scenario_id);
                     return (
                       <Link
                         key={s.id}

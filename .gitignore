@@ -43,5 +43,11 @@ next-env.d.ts
 # local sqlite database
 /data
 
+# cloudflare / opennext
+/.open-next
+.dev.vars
+.wrangler
+cloudflare-env.d.ts
+
 # VS Code Local History extension
 /.history

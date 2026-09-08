@@ -10,18 +10,6 @@ export const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
 /** Low-latency flash model from the original test snippet. */
 export const DEFAULT_ELEVENLABS_MODEL = "eleven_flash_v2_5";
 
-/**
- * Voice id from `ELEVENLABS_VOICE_ID` in `.env.local`.
- * Server-only — do not import this into client components.
- */
-export function readElevenLabsVoiceId(): string | null {
-  const raw = process.env.ELEVENLABS_VOICE_ID?.trim();
-  if (!raw) return null;
-  const unquoted = raw.replace(/^["']|["']$/g, "");
-  const value = unquoted.split(/\s+#/)[0]?.trim() ?? "";
-  return value || null;
-}
-
 export const ELEVENLABS_MODELS: { id: string; label: string }[] = [
   { id: "eleven_flash_v2_5", label: "Flash v2.5（低延遲）" },
   { id: "eleven_multilingual_v2", label: "Multilingual v2" },

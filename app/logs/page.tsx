@@ -33,14 +33,15 @@ export default async function LogsPage(props: PageProps<"/logs">) {
   const page = Math.max(1, Number(one("page") ?? "1") || 1);
 
   const filter: LogFilter = { operation, status, q };
-  const total = countLogs(filter);
+  const total = await countLogs(filter);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const current = Math.min(page, pages);
-  const logs = getLogs(filter, PAGE_SIZE, (current - 1) * PAGE_SIZE);
-
-  const operations = getLogOperations();
-  const summary = getLogSummary();
-  const grandTotal = countLogs({});
+  const [logs, operations, summary, grandTotal] = await Promise.all([
+    getLogs(filter, PAGE_SIZE, (current - 1) * PAGE_SIZE),
+    getLogOperations(),
+    getLogSummary(),
+    countLogs({}),
+  ]);
 
   const href = (patch: Record<string, string | undefined>) => {
     const next = new URLSearchParams();

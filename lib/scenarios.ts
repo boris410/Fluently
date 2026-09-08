@@ -1,5 +1,14 @@
 export type Level = "beginner" | "intermediate" | "advanced";
 
+/** The kind of person the AI plays. Stored as `scenarios.role_type`. */
+export type RoleType = "staff" | "friend" | "boss";
+
+export const ROLE_TYPES: { id: RoleType; label: string }[] = [
+  { id: "staff", label: "工作人員" },
+  { id: "friend", label: "朋友" },
+  { id: "boss", label: "主管" },
+];
+
 export type Scenario = {
   id: string;
   emoji: string;
@@ -7,6 +16,8 @@ export type Scenario = {
   titleZh: string;
   blurb: string;
   level: Level;
+  /** The kind of role the tutor plays (staff / friend / boss). */
+  roleType: RoleType;
   /** Who the tutor plays. Fed into the Gemini system instruction. */
   persona: string;
   /** Language goals the tutor will steer the conversation towards. */
@@ -17,10 +28,13 @@ export type Scenario = {
   tint: [string, string];
 };
 
-/** Seed ids — stable, used as SQLite primary keys. */
+/** Seed ids — stable, used as SQLite/D1 primary keys. */
 export const DEFAULT_STUDENT_ID = "default";
 export const DEFAULT_STUDENT_NAME = "Learner";
-export const DEFAULT_VOICE_ROW_ID = "default";
+/** Row id of the single seeded ElevenLabs voice (Bella). */
+export const DEFAULT_VOICE_ROW_ID = "bella";
+export const DEFAULT_VOICE_ID = "EXAVITQu4vr4xnSDxMaL";
+export const DEFAULT_VOICE_LABEL = "Bella";
 
 export type SceneCatalog = {
   id: string;
@@ -43,21 +57,11 @@ export const SCENE_CATALOG: SceneCatalog[] = [
 
 export type CharacterCatalog = { id: string; name: string };
 
-export const CHARACTER_CATALOG: CharacterCatalog[] = [
-  { id: "bella", name: "Bella" },
-  { id: "jordan", name: "Jordan" },
-  { id: "sam", name: "Sam" },
-  { id: "riley", name: "Riley" },
-  { id: "mei", name: "Mei" },
-  { id: "alex", name: "Alex" },
-  { id: "morgan", name: "Morgan" },
-  { id: "taylor", name: "Taylor" },
-  { id: "quinn", name: "Quinn" },
-];
+/** Only Bella for now; every scenario is voiced by her. */
+export const CHARACTER_CATALOG: CharacterCatalog[] = [{ id: "bella", name: "Bella" }];
 
 export type ScenarioCatalog = Scenario & {
   sceneId: string;
-  roleTitle: string;
   characterId: string;
 };
 
@@ -74,8 +78,8 @@ export const scenarios: ScenarioCatalog[] = [
   {
     id: "cafe",
     sceneId: "cafe",
-    roleTitle: "櫃檯",
     characterId: "bella",
+    roleType: "staff",
     emoji: "☕",
     title: "Ordering Coffee",
     titleZh: "咖啡廳點餐",
@@ -90,40 +94,42 @@ export const scenarios: ScenarioCatalog[] = [
   {
     id: "directions",
     sceneId: "street",
-    roleTitle: "路人",
-    characterId: "jordan",
+    characterId: "bella",
+    roleType: "friend",
     emoji: "🧭",
-    title: "Asking Directions",
-    titleZh: "街頭問路",
-    blurb: "在陌生城市迷路了，向路人問路並確認自己有沒有聽懂。",
+    title: "Giving Directions",
+    titleZh: "街頭被問路",
+    blurb: "在街頭被觀光客攔下問路，練習清楚地指路與描述方位。",
     level: "beginner",
-    persona: "a helpful local pedestrian who knows the neighbourhood well",
-    focus: ["Prepositions of place", "Clarifying", "Thanking"],
+    persona:
+      "a friendly tourist who is a little lost and asks the learner for directions",
+    focus: ["Giving directions", "Prepositions of place", "Landmarks"],
     opening:
-      "Sure, you look a little lost! Where are you trying to go? I know this neighborhood pretty well.",
+      "Excuse me, sorry to bother you! I'm a bit lost — do you know how to get to the train station from here?",
     tint: ["#dfeae0", "#243329"],
   },
   {
     id: "small-talk",
     sceneId: "party",
-    roleTitle: "派對賓客",
-    characterId: "sam",
+    characterId: "bella",
+    roleType: "friend",
     emoji: "💬",
     title: "Small Talk",
-    titleZh: "閒聊破冰",
-    blurb: "派對上遇到不認識的人，用三分鐘找出你們的共同話題。",
+    titleZh: "派對被搭訕",
+    blurb: "派對上有人主動來搭話，用三分鐘找出你們的共同話題。",
     level: "beginner",
-    persona: "Sam, another guest at a house party who has just met the learner",
+    persona:
+      "Sam, a friendly guest at a house party who comes over to strike up a conversation with the learner",
     focus: ["Openers", "Follow-up questions", "Ending politely"],
     opening:
-      "Hey! I don't think we've met — I'm Sam. How do you know the host?",
+      "Hey! I don't think we've met — I'm Sam. Mind if I join you? This party is pretty packed, huh?",
     tint: ["#e6e3f2", "#2b2937"],
   },
   {
     id: "hotel",
     sceneId: "hotel",
-    roleTitle: "櫃檯",
-    characterId: "riley",
+    characterId: "bella",
+    roleType: "staff",
     emoji: "🏨",
     title: "Hotel Check-in",
     titleZh: "飯店入住",
@@ -138,83 +144,66 @@ export const scenarios: ScenarioCatalog[] = [
   {
     id: "clinic",
     sceneId: "clinic",
-    roleTitle: "醫師",
-    characterId: "mei",
+    characterId: "bella",
+    roleType: "staff",
     emoji: "🩺",
     title: "At the Clinic",
-    titleZh: "看診就醫",
+    titleZh: "看診問診",
     blurb: "向醫生描述症狀、聽懂醫囑，並問清楚該注意什麼。",
     level: "intermediate",
     persona: "a general practitioner seeing a patient at a walk-in clinic",
     focus: ["Describing symptoms", "Duration & frequency", "Instructions"],
-    opening:
-      "Hello, come on in and have a seat. So, what brings you in today?",
+    opening: "Hello, come on in and have a seat. So, what brings you in today?",
     tint: ["#f0dfe2", "#372529"],
   },
   {
-    id: "phone-call",
+    id: "phone-interview",
     sceneId: "phone",
-    roleTitle: "客服",
-    characterId: "alex",
+    characterId: "bella",
+    roleType: "boss",
     emoji: "📞",
-    title: "On the Phone",
-    titleZh: "電話溝通",
-    blurb: "看不到表情、聽不清楚，打一通把事情講清楚的英文電話。",
+    title: "Phone Interview",
+    titleZh: "電話面試",
+    blurb: "接到招募人員來電，在看不到表情的情況下完成第一輪電話面試。",
     level: "intermediate",
-    persona: "Alex, a support agent at Nordwell taking a phone call",
-    focus: ["Spelling out loud", "Asking to repeat", "Taking messages"],
+    persona: "a recruiter conducting a first-round phone interview with the learner",
+    focus: ["Phone etiquette", "Self-introduction", "Asking to repeat"],
     opening:
-      "Thanks for calling Nordwell Support, this is Alex speaking. How can I help you?",
+      "Hi, thanks for taking my call! Is now still a good time for a quick phone interview?",
     tint: ["#e9e4d6", "#332f24"],
   },
   {
     id: "interview",
     sceneId: "workplace",
-    roleTitle: "面試官",
-    characterId: "morgan",
+    characterId: "bella",
+    roleType: "boss",
     emoji: "💼",
     title: "Job Interview",
-    titleZh: "英文面試",
+    titleZh: "面試現場",
     blurb: "面對面試官，講出你的經歷、強項，還有那個經典的難題。",
     level: "advanced",
-    persona: "a hiring manager interviewing the learner for a role on your team",
+    persona:
+      "a hiring manager interviewing the learner in person for a role on the team",
     focus: ["Self-introduction", "STAR answers", "Asking back"],
     opening:
       "Thanks for coming in today. To get us started — could you walk me through your background?",
     tint: ["#e2e6ea", "#262b2f"],
   },
   {
-    id: "meeting",
-    sceneId: "workplace",
-    roleTitle: "主管",
-    characterId: "taylor",
-    emoji: "📊",
-    title: "Business Meeting",
-    titleZh: "商務會議",
-    blurb: "在會議上報告進度、接受追問，並禮貌地推回不合理的期待。",
-    level: "advanced",
-    persona: "the learner's team lead running a weekly project check-in",
-    focus: ["Status updates", "Disagreeing politely", "Next steps"],
-    opening:
-      "Alright, let's get started. Could you give us a quick update on where the project stands?",
-    tint: ["#dde8e6", "#22302e"],
-  },
-  {
     id: "debate",
     sceneId: "forum",
-    roleTitle: "對談者",
-    characterId: "quinn",
+    characterId: "bella",
+    roleType: "friend",
     emoji: "⚖️",
     title: "Opinion & Debate",
-    titleZh: "觀點交鋒",
-    blurb: "挑一個有爭議的題目，練習把立場說得有邏輯又有風度。",
+    titleZh: "環保辯論",
+    blurb: "挑一個環保爭議題目，練習把立場說得有邏輯又有風度。",
     level: "advanced",
-    persona: "a thoughtful conversation partner who takes the opposing position",
+    persona:
+      "a thoughtful debate partner discussing environmental issues who takes the opposing position",
     focus: ["Stating a position", "Counter-arguments", "Hedging"],
     opening:
-      "Let's dig into something interesting: should companies let people work fully remote? Where do you stand?",
+      "Let's dig into something timely: should single-use plastics be banned outright? Where do you stand?",
     tint: ["#efe2d3", "#372c22"],
   },
 ];
-
-export const roleIdFor = (scenarioId: string) => `${scenarioId}-tutor`;

@@ -1,22 +1,37 @@
 # Fluently — 資料層與 AI 串接
 
-> 記錄 SQLite schema、Gemini 串接方式、API key 的流向，以及 token/來回次數是怎麼算出來的。
+> 記錄 DB schema、Gemini 串接方式、API key 的流向，以及 token/來回次數是怎麼算出來的。
 > 程式碼在 [`lib/db.ts`](../lib/db.ts)、[`lib/gemini.ts`](../lib/gemini.ts)、[`app/api/chat/route.ts`](../app/api/chat/route.ts)。
 > 改 schema 或改串接方式時，**同一個 commit 內更新這份文件**。
 
 ---
 
-## 1. SQLite
+## 1. 資料庫（D1 / node:sqlite 雙驅動）
 
-用 Node 22 內建的 `node:sqlite`（`DatabaseSync`），**沒有原生相依套件要編譯**。
-資料庫檔案在 `data/fluently.db`（已 gitignore），首次寫入時自動建立。
-啟用 `WAL` 與 `foreign_keys`。連線用 `globalThis` 快取，避免 dev HMR 每次改檔就漏一個 handle。
+同一套 SQL，兩個驅動，藏在 [`lib/db.ts`](../lib/db.ts) 的一層 async adapter 後面：
+
+| 環境 | 驅動 | 取得方式 |
+|---|---|---|
+| 正式 / `npm run preview`（Cloudflare Workers） | **D1** | `getCloudflareContext().env.DB` |
+| `next dev`（純 Node） | `node:sqlite` | `data/fluently.db`（已 gitignore） |
+
+D1 就是 SQLite，方言相同，所以查詢字串兩邊共用；差別只在 **D1 是 async**，
+因此 `lib/db.ts` 每個匯出函式都回傳 `Promise`，呼叫端一律 `await`。
+`node:sqlite` 是**動態 import**（`await import("node:sqlite")`），確保它不會被打進
+Workers bundle（那個 runtime 沒有 `node:sqlite`）。驅動選擇：先試 `getCloudflareContext()`
+拿 `env.DB`，拿不到（`next dev`）就退回 `node:sqlite`。
+
+- 正式資料靠 **wrangler migrations**（`migrations/0001_init.sql` 建表、`0002_seed.sql` 種資料），
+  部署時 `wrangler d1 migrations apply fluently_db --remote`。
+- 本機 `next dev` 走 `node:sqlite`：開庫時跑 `SCHEMA` + `nodeMigrate()` + `nodeSeed()`，
+  免 wrangler 也有資料。`WAL` / `foreign_keys` 與 `globalThis` 連線快取只在這條路。
 
 > Node 會印 `ExperimentalWarning: SQLite is an experimental feature`——這是預期的，不是錯誤。
 
 ### Schema
 
-可整段貼進 SQLite 查詢工具建表。`--` 是欄位註記。
+正式的權威來源是 `migrations/0001_init.sql`；下面同一份 schema 也存在 `lib/db.ts` 的
+`SCHEMA` 字串供 dev 用。`--` 是欄位註記。
 
 ```sql
 PRAGMA foreign_keys = ON;
@@ -39,14 +54,15 @@ CREATE TABLE IF NOT EXISTS scenes (
   tint_dark  TEXT NOT NULL     -- 深色模式底色
 );
 
--- ElevenLabs 音色庫；seed 從 ELEVENLABS_VOICE_ID 寫入，沒有再退回 env
+-- ElevenLabs 音色庫；voice 一律讀這張表，不再讀 env
 CREATE TABLE IF NOT EXISTS elevenlabs_voices (
-  id       TEXT PRIMARY KEY, -- 內部 id，seed 預設 'default'
+  id       TEXT PRIMARY KEY, -- 內部 id，seed 預設 'bella'
   voice_id TEXT NOT NULL,    -- ElevenLabs 平台的 voice id
-  label    TEXT NOT NULL     -- 給人看的名稱
+  label    TEXT NOT NULL,    -- 給人看的名稱，例如 Bella
+  is_free  INTEGER NOT NULL DEFAULT 0 -- 1 = 免費方案可用；defaultVoiceId() 優先選這種
 );
 
--- 系統裡的人物，例如 Bella、Andy
+-- 系統裡的人物，例如 Bella
 CREATE TABLE IF NOT EXISTS characters (
   id                  TEXT PRIMARY KEY, -- 人物 id，例如 bella
   name                TEXT NOT NULL,    -- 顯示名
@@ -54,25 +70,20 @@ CREATE TABLE IF NOT EXISTS characters (
 );
 
 -- 對話情境：點咖啡 / 面試…；id 即路由 /chat/[id]，公開後不可改
+-- 角色以 role_type 欄位表示（不另立 roles 表，見文末「決策記錄」）
 CREATE TABLE IF NOT EXISTS scenarios (
-  id         TEXT PRIMARY KEY, -- 情境 id，例如 cafe
-  scene_id   TEXT NOT NULL REFERENCES scenes(id), -- 所屬場景
-  title      TEXT NOT NULL,    -- 英文情境名，例如 Ordering Coffee
-  title_zh   TEXT NOT NULL,    -- 中文情境名，例如 咖啡廳點餐
-  blurb      TEXT NOT NULL,    -- 一句話描述「你會遇到什麼」
-  level      TEXT NOT NULL,    -- beginner / intermediate / advanced
-  focus      TEXT NOT NULL,    -- 語言重點，JSON 陣列字串
-  opening    TEXT NOT NULL,    -- 家教開場白（英文）
-  sort_order INTEGER NOT NULL DEFAULT 0 -- 列表排序，數字越小越前
-);
-
--- 情境裡的職位：櫃檯 / 路人 / 面試官
-CREATE TABLE IF NOT EXISTS roles (
-  id           TEXT PRIMARY KEY, -- '{scenarioId}-tutor'
-  scenario_id  TEXT NOT NULL REFERENCES scenarios(id), -- 所屬情境
-  character_id TEXT NOT NULL REFERENCES characters(id), -- 由哪個人物扮演
-  title        TEXT NOT NULL,    -- 職位短名，例如 櫃檯
-  persona      TEXT NOT NULL     -- 英文人設，餵給 Gemini system instruction
+  id           TEXT PRIMARY KEY, -- 情境 id，例如 cafe
+  scene_id     TEXT NOT NULL REFERENCES scenes(id),     -- 所屬場景
+  character_id TEXT NOT NULL REFERENCES characters(id), -- 由哪個人物扮演（決定聲音）
+  role_type    TEXT NOT NULL CHECK (role_type IN ('staff', 'friend', 'boss')), -- 工作人員/朋友/主管
+  title        TEXT NOT NULL,    -- 英文情境名，例如 Ordering Coffee
+  title_zh     TEXT NOT NULL,    -- 中文情境名，例如 咖啡廳點餐
+  blurb        TEXT NOT NULL,    -- 一句話描述「你會遇到什麼」
+  level        TEXT NOT NULL,    -- beginner / intermediate / advanced
+  focus        TEXT NOT NULL,    -- 語言重點，JSON 陣列字串
+  opening      TEXT NOT NULL,    -- 家教開場白（英文）
+  persona      TEXT NOT NULL,    -- 英文人設，餵給 Gemini system instruction
+  sort_order   INTEGER NOT NULL DEFAULT 0 -- 列表排序，數字越小越前
 );
 
 -- 一次練習對話
@@ -80,7 +91,6 @@ CREATE TABLE IF NOT EXISTS sessions (
   id               TEXT PRIMARY KEY, -- crypto.randomUUID()
   scenario_id      TEXT NOT NULL,    -- 對應 scenarios.id（程式關聯，schema 未加 FK）
   user_student_id  TEXT,             -- 哪位學習者；對應 user_students.id
-  role_id          TEXT,             -- 這場 AI 演哪個職位；對應 roles.id
   mode             TEXT NOT NULL DEFAULT 'script', -- script 獨白式 / live 真實情境
   created_at       INTEGER NOT NULL, -- 開始時間 epoch ms
   updated_at       INTEGER NOT NULL  -- 最後一則訊息時間 epoch ms
@@ -143,35 +153,41 @@ CREATE INDEX IF NOT EXISTS idx_calls_kind ON api_calls(kind);
 CREATE INDEX IF NOT EXISTS idx_logs_requested ON api_logs(requested_at);
 CREATE INDEX IF NOT EXISTS idx_logs_operation ON api_logs(operation);
 CREATE INDEX IF NOT EXISTS idx_scenarios_scene ON scenarios(scene_id);
-CREATE INDEX IF NOT EXISTS idx_roles_scenario ON roles(scenario_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_student ON sessions(user_student_id);
 ```
 
 ### 遷移與種子
 
-`migrate()` 用 `PRAGMA table_info` 檢查欄位是否存在，缺了就 `ALTER TABLE` 補上。
-**依賴新欄位的索引必須建在 `migrate()` 裡面**，不能放進 `SCHEMA` 字串。
+**正式（D1）**：schema 與資料都走 wrangler migrations——
 
-`seed()` 每次開庫會 upsert [`lib/scenarios.ts`](../lib/scenarios.ts) 的目錄到
-`scenes` / `scenarios` / `roles` / `characters` / `elevenlabs_voices`，並確保有一筆
-`user_students.id = 'default'`。舊 session / messages 由 `backfill()` 補上學生與角色。
+```bash
+wrangler d1 migrations apply fluently_db --local   # 本機 preview
+wrangler d1 migrations apply fluently_db --remote  # 正式，部署時執行
+```
 
-列表與對話頁的 `getScenario()` / `listScenarios()` **讀 SQLite**，不再直接讀 TS 陣列。
+`migrations/0001_init.sql` 建表（含 `DROP TABLE IF EXISTS roles`），`0002_seed.sql`
+用 `INSERT ... ON CONFLICT` 種入基礎資料（可重複套用）。
+
+**本機（`node:sqlite`）**：`openNodeDb()` 開庫時跑 `SCHEMA` + `nodeMigrate()`（`ALTER` 補欄位、
+丟掉舊 `roles` 表）+ `nodeSeed()`（upsert [`lib/scenarios.ts`](../lib/scenarios.ts) 目錄）。
+schema 大改時可直接刪 `data/fluently.db` 讓它重建。
+
+列表與對話頁的 `getScenario()` / `listScenarios()` **讀 DB**，不再直接讀 TS 陣列。
 
 ### 表關係
 
 `api_logs` 的 `session_id` / `user_student_id` 只是關聯用，**沒有外鍵**。
+沒有 `roles` 表：角色類型是 `scenarios.role_type` 欄位；聲音經由
+`scenario → character → voice` 推導。
 
 ```mermaid
 erDiagram
   user_students ||--o{ sessions : practices
   scenes ||--o{ scenarios : contains
-  scenarios ||--o{ roles : has
-  characters ||--o{ roles : plays
+  characters ||--o{ scenarios : plays
   elevenlabs_voices ||--o{ characters : voices
   sessions }o--|| scenarios : of
   sessions }o--|| user_students : by
-  sessions }o--o| roles : tutorAs
   sessions ||--o{ messages : has
   sessions ||--o{ api_calls : billed
   messages }o--o| user_students : learner
@@ -183,9 +199,9 @@ erDiagram
 | 表 | 回答的問題 |
 |---|---|
 | `user_students` | 誰在練 |
-| `scenes` / `scenarios` / `roles` / `characters` | 在哪、練什麼場面、AI 演誰、叫什麼名字 |
-| `elevenlabs_voices` | 那個角色用哪顆 ElevenLabs 音色 |
-| `sessions` | 這段練習屬於誰、哪個情境、哪個角色 |
+| `scenes` / `scenarios` / `characters` | 在哪、練什麼場面（含 `role_type` 演哪種角色）、由誰扮演 |
+| `elevenlabs_voices` | 那個角色用哪顆 ElevenLabs 音色（`is_free` 標記免費方案可用） |
+| `sessions` | 這段練習屬於誰、哪個情境 |
 | `messages` | **記憶**——每次呼叫 Gemini 時整段歷史都從這裡撈出來重送 |
 | `api_calls` | **用量帳**——一列 = 一次計費呼叫，`kind` 分對話與語音 |
 | `api_logs` | **原始紀錄**——一列 = 一次對外呼叫，含送出/收到的實際內容與狀態碼 |
@@ -300,15 +316,18 @@ Route handler（server-only）再傳 `onCall: (call) => logApiCall({ ...call, se
 驗證用 [`/api/key-check`](../app/api/key-check/route.ts)，它呼叫 `GET /v1beta/models?pageSize=1`
 ——**不花任何 token** 就能確認 key 有效。
 
-ElevenLabs 的 key **只存在** `.env.local` 的 `ELEVENLABS_API_KEY`（沒有 `NEXT_PUBLIC_` 前綴）。
+ElevenLabs 的 key **只存在** `.env.local` 的 `ELEVENLABS_API_KEY`（沒有 `NEXT_PUBLIC_` 前綴；
+正式環境設在 Worker secret，本機 preview 放 `.dev.vars`）。
 瀏覽器打 [`/api/elevenlabs`](../app/api/elevenlabs/route.ts)，由伺服器加上 `xi-api-key` 轉送給 ElevenLabs。
-對話裡的音色優先用 session → role → character → `elevenlabs_voices.voice_id`；沒有再退回 `.env.local` 的 `ELEVENLABS_VOICE_ID`（也是 seed 來源）。
+**音色一律讀 `elevenlabs_voices.voice_id`**：有 session 用 `resolveSessionVoiceId()`
+（session → scenario → character → voice），沒有 session 用 `defaultVoiceId()`
+（`ORDER BY is_free DESC` 取一筆，即 Bella）。env 的 `ELEVENLABS_VOICE_ID` 已不再參與選音。
 
 對話頁（獨白式與真實情境）預設走這條 TTS：`speakReply()` 依設定打 `/api/elevenlabs`，
 把家教回覆用角色音色唸出來，舞台畫面仍依 phase 切靜態圖。測試頁在 [`/tts`](../app/tts/page.tsx)。
 
 有 `scenarioId` 時會建／續 session，並寫 `api_calls`（`kind='tts'`，token 為 0——ElevenLabs 不回 `usageMetadata`，不估算）以及 `api_logs`（`platform='elevenlabs'`）。
-測試頁沒帶情境，只寫 `api_logs`，音色退回 env。
+測試頁沒帶情境，只寫 `api_logs`，音色用 `defaultVoiceId()`（DB）。
 
 ---
 
@@ -331,7 +350,7 @@ ElevenLabs 的 key **只存在** `.env.local` 的 `ELEVENLABS_API_KEY`（沒有 
 
 沒存過偏好時 `getVoiceSource()` 回 `elevenlabs`。雲端合成失敗會退回瀏覽器語音，對話不會突然安靜。
 
-Voice Library 的音色在免費方案會回 402，畫面會說明原因並改用系統語音。角色音色存在 `elevenlabs_voices`，env 只當種子與後備。
+Voice Library 的音色在免費方案會回 402，畫面會說明原因並改用系統語音。角色音色一律存在 `elevenlabs_voices`（`is_free=1` 標記免費方案可用），env 不再參與選音。
 
 **Gemini TTS 的呼叫方式**（[`synthesizeSpeech`](../lib/gemini.ts)）：
 
@@ -446,3 +465,37 @@ Voice Library 的音色在免費方案會回 402，畫面會說明原因並改�
 - **`api_logs` 會無限成長**，也**存了對話原文**。目前沒有自動清理或保留期限，
   需要的話得自己 `DELETE FROM api_logs WHERE requested_at < …`。
 - **TTS 模型是 preview 版**。`gemini-3.1-flash-tts-preview` 隨時可能變動或改名。
+
+---
+
+## 8. 決策記錄（ADR）
+
+### ADR-002：角色用欄位，不用表（`scenarios.role_type`）
+
+- **日期**：2026-09-08
+- **背景**：原本每個情境對應一列 `roles`（綁 `scenario_id`），存 `persona` 與 `character_id`。
+  想把角色抽成可跨情境共用的分類（工作人員／朋友／主管）。
+- **選項**：
+  - A：把 `roles` 正規化成共用清單，情境改引用 `role_id`。
+  - B：**移除 `roles` 表**，改用 `scenarios.role_type` 欄位（`staff`/`friend`/`boss`），
+    `persona` 與 `character_id` 直接掛在 `scenarios`。
+  - C：維持每情境一列的 `roles`。
+- **決定**：**B**。
+- **理由**：
+  - `role_type` **既不顯示在 UI、也不進 Gemini prompt**（system instruction 只用
+    `persona`/`title`/`blurb`/`level`/`focus`），所以獨立一張表是過度正規化。
+  - 對 **token 完全沒有影響**——送給模型的內容與角色綁不綁表無關。
+  - `persona` 本來就必須「每情境一份」（同樣是工作人員，咖啡店店員 ≠ 飯店櫃檯），
+    留在 `scenarios` 最直接。
+  - 需要「跨情境角色分類」時用一個欄位就夠；日後真要做角色層級設定，
+    再升級成獨立表並補一次 migration 也不遲。
+
+### ADR-001：資料層搬到 D1（保留 node:sqlite 供 dev）
+
+- **日期**：2026-09-08
+- **背景**：要部署到 Cloudflare，但 Workers runtime 沒有 `node:sqlite`、也沒有可寫檔案系統，
+  DB 頁面會 500。
+- **決定**：正式用 **Cloudflare D1**（`env.DB`，OpenNext 提供 context）；`next dev` 仍用
+  `node:sqlite`。兩者共用 SQL，藏在一層 async adapter 後面。
+- **理由**：D1 就是 SQLite，SQL 可共用；本機保留 `node:sqlite` 讓 dev 免 wrangler、迭代快。
+  代價是所有 DB 函式改為 async（D1 API 是非同步的）。

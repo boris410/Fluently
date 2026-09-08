@@ -12,8 +12,8 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-export default function ScenariosPage() {
-  const scenarios = listScenarios();
+export default async function ScenariosPage() {
+  const scenarios = await listScenarios();
   return (
     <>
       <SiteHeader compact />

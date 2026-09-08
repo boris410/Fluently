@@ -12,13 +12,13 @@ export const dynamic = "force-dynamic";
 
 export async function generateMetadata(props: PageProps<"/chat/[id]">) {
   const { id } = await props.params;
-  const scenario = getScenario(id);
+  const scenario = await getScenario(id);
   return { title: scenario ? `${scenario.title} — Fluently` : "Fluently" };
 }
 
 export default async function ChatPage(props: PageProps<"/chat/[id]">) {
   const { id } = await props.params;
-  const scenario = getScenario(id);
+  const scenario = await getScenario(id);
   if (!scenario) notFound();
 
   const level = LEVELS.find((l) => l.id === scenario.level)!;
@@ -26,7 +26,9 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
 
   // `?session=<id>` resumes an earlier conversation from the database.
   const resumeId =
-    typeof session === "string" && sessionExists(session) ? session : null;
+    typeof session === "string" && (await sessionExists(session))
+      ? session
+      : null;
 
   // No mode yet and nothing to resume — let the learner choose one first.
   // Resuming always lands in the transcript, which is the point of resuming.
@@ -34,7 +36,7 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
     modeParam === "live" ? "live" : modeParam === "script" || resumeId ? "script" : null;
 
   const turns: ChatTurn[] = resumeId
-    ? getHistory(resumeId).map((m) => ({
+    ? (await getHistory(resumeId)).map((m) => ({
         id: `m${m.id}`,
         role: m.role,
         text: m.content,
@@ -42,8 +44,8 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
     : [{ id: "opening", role: "model", text: scenario.opening }];
 
   const stats = resumeId
-    ? (() => {
-        const s = getSessionStats(resumeId);
+    ? await (async () => {
+        const s = await getSessionStats(resumeId);
         return {
           calls: s.calls,
           promptTokens: s.prompt_tokens,

@@ -1,10 +1,14 @@
 # Fluently — 對話情境規格
 
-> 目前 9 個情境的完整記錄。**執行時資料在 SQLite**（`scenes` / `scenarios` / `roles` / `characters`），
-> seed 目錄在 [`lib/scenarios.ts`](../lib/scenarios.ts)。
+> 目前 8 個情境（一場景一個）的完整記錄。**執行時資料在 DB**（`scenes` / `scenarios` / `characters`），
+> 正式是 Cloudflare D1、dev 是 `node:sqlite`；seed 目錄在 [`lib/scenarios.ts`](../lib/scenarios.ts)、
+> 正式 seed 在 `migrations/0002_seed.sql`。
 > 這份文件是說明書：欄位定義、每個情境的設定、以及新增情境的規則。
 >
-> 兩邊不一致時以 `lib/scenarios.ts` 的 seed 為準（開庫時 upsert），並修正這份文件。
+> 角色**沒有獨立的 `roles` 表**：用 `scenarios.role_type`（`staff`/`friend`/`boss`）表示，
+> 決策見 [DATA.md §8 ADR-002](DATA.md)。目前所有情境都由 **Bella** 演出（同一顆聲音）。
+>
+> 兩邊不一致時以 `lib/scenarios.ts` 的 seed 為準（dev 開庫時 upsert），並修正這份文件。
 
 ---
 
@@ -13,17 +17,17 @@
 ```ts
 type ScenarioCatalog = Scenario & {
   sceneId: string; // scenes.id（咖啡店、街頭、職場…）
-  roleTitle: string; // 職位（櫃檯、路人…）→ roles.title
-  characterId: string; // characters.id（Bella、Sam…）
+  characterId: string; // characters.id（目前只有 bella）
 };
+// Scenario 內含 roleType: "staff" | "friend" | "boss"
 ```
 
 | 欄位 | 說明 | 撰寫規則 |
 |---|---|---|
 | `id` | 唯一代號，同時是路由 `/chat/[id]` | 小寫英文 + 連字號；**一旦公開就不要再改**（會斷連結與 DB 外鍵） |
 | `sceneId` | 所屬場景 | 對應 `SCENE_CATALOG` |
-| `roleTitle` | 情境裡的職位 | 中文短名，如「櫃檯」 |
-| `characterId` | 扮演此職位的人物 | 對應 `CHARACTER_CATALOG`（Bella、Andy…） |
+| `roleType` | AI 演哪種角色 | `staff` 工作人員 / `friend` 朋友 / `boss` 主管 |
+| `characterId` | 由哪個人物扮演（決定聲音） | 對應 `CHARACTER_CATALOG`（目前只有 `bella`） |
 | `emoji` | 卡片上的圖示 | 單一 emoji，避免膚色／性別變體 |
 | `title` | 英文情境名 | 2–3 個字的名詞片語，Title Case |
 | `titleZh` | 中文情境名 | 4–6 字，口語、具體 |
@@ -39,8 +43,9 @@ type ScenarioCatalog = Scenario & {
 | 匯出 | 用途 |
 |---|---|
 | `LEVELS` | 難度清單（`id` / `label` 中文 / `en` 英文），供篩選器與 badge 使用 |
-| `SCENE_CATALOG` / `CHARACTER_CATALOG` / `scenarios` | seed 進 SQLite 的目錄 |
-| `listScenarios()` / `getScenario(id)` | **在 `lib/db.ts`**：從 SQLite 組出 UI 用的 `Scenario`（含 scene 的 emoji/tint 與 role 的 persona） |
+| `ROLE_TYPES` | 角色類型清單（`staff`/`friend`/`boss` 與中文標籤） |
+| `SCENE_CATALOG` / `CHARACTER_CATALOG` / `scenarios` | seed 進 DB 的目錄（dev 用；正式對應 `migrations/0002_seed.sql`） |
+| `listScenarios()` / `getScenario(id)` | **在 `lib/db.ts`**：從 DB 組出 UI 用的 `Scenario`（含 scene 的 emoji/tint 與 scenario 的 persona/role_type） |
 | `levelLabel(level)` | 取難度標籤的 helper，**目前沒有被使用**（兩處頁面各自寫了 `LEVELS.find(...)`） |
 
 ---
@@ -53,23 +58,24 @@ type ScenarioCatalog = Scenario & {
 | 中級 | `intermediate` | 中級 | 需要描述細節、確認資訊、處理小狀況，對方會追問 |
 | 進階 | `advanced` | 進階 | 要組織論點、應對壓力、在有立場的情況下維持禮貌 |
 
-目前三個難度各 3 個情境，**新增時盡量維持平衡**。
+目前難度分佈為初級 3、中級 3、進階 2，**新增時盡量維持平衡**。
 
 ---
 
 ## 3. 情境總表
 
-| # | `id` | Emoji | English | 中文 | 難度 | Focus |
-|---|---|---|---|---|---|---|
-| 1 | `cafe` | ☕ | Ordering Coffee | 咖啡廳點餐 | 初級 | Polite requests · Sizes & options · Small talk |
-| 2 | `directions` | 🧭 | Asking Directions | 街頭問路 | 初級 | Prepositions of place · Clarifying · Thanking |
-| 3 | `small-talk` | 💬 | Small Talk | 閒聊破冰 | 初級 | Openers · Follow-up questions · Ending politely |
-| 4 | `hotel` | 🏨 | Hotel Check-in | 飯店入住 | 中級 | Confirming details · Making requests · Complaints |
-| 5 | `clinic` | 🩺 | At the Clinic | 看診就醫 | 中級 | Describing symptoms · Duration & frequency · Instructions |
-| 6 | `phone-call` | 📞 | On the Phone | 電話溝通 | 中級 | Spelling out loud · Asking to repeat · Taking messages |
-| 7 | `interview` | 💼 | Job Interview | 英文面試 | 進階 | Self-introduction · STAR answers · Asking back |
-| 8 | `meeting` | 📊 | Business Meeting | 商務會議 | 進階 | Status updates · Disagreeing politely · Next steps |
-| 9 | `debate` | ⚖️ | Opinion & Debate | 觀點交鋒 | 進階 | Stating a position · Counter-arguments · Hedging |
+| # | `id` | Emoji | English | 中文 | 難度 | role_type | Focus |
+|---|---|---|---|---|---|---|---|
+| 1 | `cafe` | ☕ | Ordering Coffee | 咖啡廳點餐 | 初級 | staff | Polite requests · Sizes & options · Small talk |
+| 2 | `directions` | 🧭 | Giving Directions | 街頭被問路 | 初級 | friend | Giving directions · Prepositions of place · Landmarks |
+| 3 | `small-talk` | 💬 | Small Talk | 派對被搭訕 | 初級 | friend | Openers · Follow-up questions · Ending politely |
+| 4 | `hotel` | 🏨 | Hotel Check-in | 飯店入住 | 中級 | staff | Confirming details · Making requests · Complaints |
+| 5 | `clinic` | 🩺 | At the Clinic | 看診問診 | 中級 | staff | Describing symptoms · Duration & frequency · Instructions |
+| 6 | `phone-interview` | 📞 | Phone Interview | 電話面試 | 中級 | boss | Phone etiquette · Self-introduction · Asking to repeat |
+| 7 | `interview` | 💼 | Job Interview | 面試現場 | 進階 | boss | Self-introduction · STAR answers · Asking back |
+| 8 | `debate` | ⚖️ | Opinion & Debate | 環保辯論 | 進階 | friend | Stating a position · Counter-arguments · Hedging |
+
+> emoji 與底色來自 **scene**（見 `scenes` 表），情境卡顯示的是所屬場景的圖示。
 
 ---
 
@@ -84,78 +90,78 @@ type ScenarioCatalog = Scenario & {
 #### ☕ `cafe` — Ordering Coffee／咖啡廳點餐
 
 - **描述**：走進街角咖啡廳，點一杯剛剛好的拿鐵，順便和店員閒聊兩句。
+- **role_type**：`staff`（工作人員）
 - **AI 扮演**：Bluebird Coffee 的咖啡師
 - **Focus**：`Polite requests` · `Sizes & options` · `Small talk`
 - **Opening**：`Hi there! Welcome to Bluebird Coffee. What can I get started for you today?`
-- **Tint**：`#f3e7d8` / `#3a2f24`
+- **Tint**：`#f3e7d8` / `#3a2f24`（scene: cafe）
 
-#### 🧭 `directions` — Asking Directions／街頭問路
+#### 🧭 `directions` — Giving Directions／街頭被問路
 
-- **描述**：在陌生城市迷路了，向路人問路並確認自己有沒有聽懂。
-- **AI 扮演**：熟悉當地的路人
-- **Focus**：`Prepositions of place` · `Clarifying` · `Thanking`
-- **Opening**：`Sure, you look a little lost! Where are you trying to go? I know this neighborhood pretty well.`
-- **Tint**：`#dfeae0` / `#243329`
+- **描述**：在街頭被觀光客攔下問路，練習清楚地指路與描述方位。
+- **role_type**：`friend`（朋友）
+- **AI 扮演**：有點迷路、向學習者問路的觀光客
+- **Focus**：`Giving directions` · `Prepositions of place` · `Landmarks`
+- **Opening**：`Excuse me, sorry to bother you! I'm a bit lost — do you know how to get to the train station from here?`
+- **Tint**：`#dfeae0` / `#243329`（scene: street）
 
-#### 💬 `small-talk` — Small Talk／閒聊破冰
+#### 💬 `small-talk` — Small Talk／派對被搭訕
 
-- **描述**：派對上遇到不認識的人，用三分鐘找出你們的共同話題。
-- **AI 扮演**：派對上的另一位賓客 Sam
+- **描述**：派對上有人主動來搭話，用三分鐘找出你們的共同話題。
+- **role_type**：`friend`（朋友）
+- **AI 扮演**：派對上主動來攀談的賓客 Sam
 - **Focus**：`Openers` · `Follow-up questions` · `Ending politely`
-- **Opening**：`Hey! I don't think we've met — I'm Sam. How do you know the host?`
-- **Tint**：`#e6e3f2` / `#2b2937`
+- **Opening**：`Hey! I don't think we've met — I'm Sam. Mind if I join you? This party is pretty packed, huh?`
+- **Tint**：`#e6e3f2` / `#2b2937`（scene: party）
 
 ### 中級
 
 #### 🏨 `hotel` — Hotel Check-in／飯店入住
 
 - **描述**：深夜抵達飯店，處理訂房、房型與一點點突發狀況。
+- **role_type**：`staff`（工作人員）
 - **AI 扮演**：The Harbour Hotel 的夜班櫃檯
 - **Focus**：`Confirming details` · `Making requests` · `Complaints`
 - **Opening**：`Good evening, and welcome to The Harbour Hotel. Do you have a reservation with us tonight?`
-- **Tint**：`#dee7f0` / `#232c36`
+- **Tint**：`#dee7f0` / `#232c36`（scene: hotel）
 
-#### 🩺 `clinic` — At the Clinic／看診就醫
+#### 🩺 `clinic` — At the Clinic／看診問診
 
 - **描述**：向醫生描述症狀、聽懂醫囑，並問清楚該注意什麼。
+- **role_type**：`staff`（工作人員）
 - **AI 扮演**：門診醫師
 - **Focus**：`Describing symptoms` · `Duration & frequency` · `Instructions`
 - **Opening**：`Hello, come on in and have a seat. So, what brings you in today?`
-- **Tint**：`#f0dfe2` / `#372529`
+- **Tint**：`#f0dfe2` / `#372529`（scene: clinic）
 
-#### 📞 `phone-call` — On the Phone／電話溝通
+#### 📞 `phone-interview` — Phone Interview／電話面試
 
-- **描述**：看不到表情、聽不清楚，打一通把事情講清楚的英文電話。
-- **AI 扮演**：Nordwell Support 客服人員 Alex
-- **Focus**：`Spelling out loud` · `Asking to repeat` · `Taking messages`
-- **Opening**：`Thanks for calling Nordwell Support, this is Alex speaking. How can I help you?`
-- **Tint**：`#e9e4d6` / `#332f24`
+- **描述**：接到招募人員來電，在看不到表情的情況下完成第一輪電話面試。
+- **role_type**：`boss`（主管）
+- **AI 扮演**：進行第一輪電話面試的招募人員
+- **Focus**：`Phone etiquette` · `Self-introduction` · `Asking to repeat`
+- **Opening**：`Hi, thanks for taking my call! Is now still a good time for a quick phone interview?`
+- **Tint**：`#e9e4d6` / `#332f24`（scene: phone）
 
 ### 進階
 
-#### 💼 `interview` — Job Interview／英文面試
+#### 💼 `interview` — Job Interview／面試現場
 
 - **描述**：面對面試官，講出你的經歷、強項，還有那個經典的難題。
-- **AI 扮演**：面試官
+- **role_type**：`boss`（主管）
+- **AI 扮演**：當面面試的用人主管
 - **Focus**：`Self-introduction` · `STAR answers` · `Asking back`
 - **Opening**：`Thanks for coming in today. To get us started — could you walk me through your background?`
-- **Tint**：`#e2e6ea` / `#262b2f`
+- **Tint**：`#e2e6ea` / `#262b2f`（scene: workplace）
 
-#### 📊 `meeting` — Business Meeting／商務會議
+#### ⚖️ `debate` — Opinion & Debate／環保辯論
 
-- **描述**：在會議上報告進度、接受追問，並禮貌地推回不合理的期待。
-- **AI 扮演**：會議主持人／直屬主管
-- **Focus**：`Status updates` · `Disagreeing politely` · `Next steps`
-- **Opening**：`Alright, let's get started. Could you give us a quick update on where the project stands?`
-- **Tint**：`#dde8e6` / `#22302e`
-
-#### ⚖️ `debate` — Opinion & Debate／觀點交鋒
-
-- **描述**：挑一個有爭議的題目，練習把立場說得有邏輯又有風度。
-- **AI 扮演**：持相反立場的對談者
+- **描述**：挑一個環保爭議題目，練習把立場說得有邏輯又有風度。
+- **role_type**：`friend`（朋友）
+- **AI 扮演**：站在相反立場、討論環保議題的對談者
 - **Focus**：`Stating a position` · `Counter-arguments` · `Hedging`
-- **Opening**：`Let's dig into something interesting: should companies let people work fully remote? Where do you stand?`
-- **Tint**：`#efe2d3` / `#372c22`
+- **Opening**：`Let's dig into something timely: should single-use plastics be banned outright? Where do you stand?`
+- **Tint**：`#efe2d3` / `#372c22`（scene: forum）
 
 ---
 
@@ -195,10 +201,11 @@ type ScenarioCatalog = Scenario & {
 ## 6. 新增一個情境
 
 1. 在 [`lib/scenarios.ts`](../lib/scenarios.ts) 的 `scenarios` 陣列**依難度分組的位置**插入新物件（目前排序是 初級 → 中級 → 進階）。必要時先在 `SCENE_CATALOG` / `CHARACTER_CATALOG` 加場景與人物。
-2. 依第 1 節的撰寫規則填滿欄位（含 `sceneId` / `roleTitle` / `characterId`）。
+2. 依第 1 節的撰寫規則填滿欄位（含 `sceneId` / `roleType` / `characterId`）。
 3. `tint` 挑一組還沒被用過的低飽和色，淺色亮度約 90%、深色約 20%（寫在對應的 scene 上）。
-4. 回來更新這份文件的第 3 節總表與第 4 節細節。
-5. 跑 `npm run build`。下次開庫 `seed()` 會 upsert 進 SQLite。
+4. **同步 `migrations/0002_seed.sql`**（正式 D1 的 seed 來源）——加一筆對應的 `INSERT ... ON CONFLICT`；若改了 schema 另開一支新的 migration。
+5. 回來更新這份文件的第 3 節總表與第 4 節細節。
+6. dev：`npm run dev`（`nodeSeed()` 會 upsert；schema 大改可先刪 `data/fluently.db`）。正式：`wrangler d1 migrations apply fluently_db --remote`。跑 `npm run build`。
 
 檢查清單：
 
@@ -226,4 +233,4 @@ type ScenarioCatalog = Scenario & {
 `id` 現在是 `sessions.scenario_id` 與 `scenarios.id` 的值，
 **更加不可以更動**——改了會讓既有的用量紀錄對不上情境。
 
-執行時情境已在 SQLite；改 seed 後重啟 dev server（或等 `getDb()` 重建連線）就會 upsert。
+執行時情境已在 DB；dev 改 seed 後重啟 dev server（`nodeSeed()` upsert），正式則套用 migration。

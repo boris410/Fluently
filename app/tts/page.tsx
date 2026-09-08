@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ElevenLabsTtsTester } from "@/components/elevenlabs-tts-tester";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
-import { readElevenLabsVoiceId } from "@/lib/elevenlabs";
+import { defaultVoiceId } from "@/lib/db";
 
 export const metadata: Metadata = {
   title: "ElevenLabs TTS 測試 — Fluently",
@@ -12,9 +12,9 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-export default function TtsPage() {
+export default async function TtsPage() {
   const configured = Boolean(process.env.ELEVENLABS_API_KEY?.trim());
-  const voiceId = readElevenLabsVoiceId();
+  const voiceId = await defaultVoiceId();
 
   return (
     <>

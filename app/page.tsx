@@ -31,8 +31,8 @@ const STEPS = [
 
 export const dynamic = "force-dynamic";
 
-export default function Home() {
-  const scenarios = listScenarios();
+export default async function Home() {
+  const scenarios = await listScenarios();
   return (
     <>
       <SiteHeader />

@@ -42,7 +42,9 @@ export async function POST(request: Request) {
   }
 
   const text = body.text?.trim();
-  const scenario = body.scenarioId ? getScenario(body.scenarioId) : undefined;
+  const scenario = body.scenarioId
+    ? await getScenario(body.scenarioId)
+    : undefined;
 
   if (!text) return Response.json({ error: "沒有要唸的內容" }, { status: 400 });
   if (!scenario) {
@@ -56,12 +58,12 @@ export async function POST(request: Request) {
   // Audio has to be booked against a session, so start one if the learner
   // has not spoken yet (replaying the opening line before their first turn).
   let sessionId = body.sessionId;
-  if (!sessionId || !sessionExists(sessionId)) {
-    sessionId = createSession(
+  if (!sessionId || !(await sessionExists(sessionId))) {
+    sessionId = await createSession(
       scenario.id,
       body.mode === "live" ? "live" : "script",
     );
-    appendMessage(sessionId, "model", scenario.opening);
+    await appendMessage(sessionId, "model", scenario.opening);
   }
 
   try {
@@ -73,7 +75,7 @@ export async function POST(request: Request) {
       onCall: (call) => logApiCall({ ...call, sessionId }),
     });
 
-    recordCall({
+    await recordCall({
       sessionId,
       kind: "tts",
       model,
@@ -100,7 +102,7 @@ export async function POST(request: Request) {
       error instanceof Error ? error.message : "語音合成失敗";
     const status = error instanceof GeminiError ? error.status : 500;
 
-    recordCall({
+    await recordCall({
       sessionId,
       kind: "tts",
       model,
