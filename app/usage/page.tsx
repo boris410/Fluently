@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { getCurrentUser } from "@/lib/current-user";
 import {
   countLogs,
   getDailyUsage,
@@ -17,22 +19,25 @@ export const metadata: Metadata = {
   description: "每次對話送出與收到的 token、來回次數與延遲。",
 };
 
-// Reads SQLite on every request.
+// Reads D1 on every request.
 export const dynamic = "force-dynamic";
 
 const DAYS = 14;
 
 export default async function UsagePage() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const [totals, chat, tts, byScenario, sessions, logCount, logSummary, dailyRaw] =
     await Promise.all([
-      getTotals(),
-      getTotals("chat"),
-      getTotals("tts"),
-      getUsageByScenario(),
-      getRecentSessions(),
-      countLogs({}),
-      getLogSummary(),
-      getDailyUsage(DAYS),
+      getTotals(user.id),
+      getTotals(user.id, "chat"),
+      getTotals(user.id, "tts"),
+      getUsageByScenario(user.id),
+      getRecentSessions(user.id),
+      countLogs(user.id, {}),
+      getLogSummary(user.id),
+      getDailyUsage(user.id, DAYS),
     ]);
   const daily = fillDays(dailyRaw, DAYS);
   const peak = Math.max(...daily.map((d) => d.total_tokens), 1);
@@ -67,7 +72,7 @@ export default async function UsagePage() {
             用量統計
           </h1>
           <p className="mt-3 max-w-xl text-[16px] leading-7 text-ink-soft">
-            每一次送出到 Gemini 的來回都記在本機 SQLite，token 數字取自 API
+            每一次送出到 Gemini 的來回都記在你的帳號，token 數字取自 API
             回傳的 <code className="font-mono text-[14px]">usageMetadata</code>，
             不是估算值。
           </p>
@@ -391,7 +396,7 @@ function Td({
   );
 }
 
-/** SQLite only returns days that have rows; show the empty ones too. */
+/** D1 only returns days that have rows; show the empty ones too. */
 function fillDays(
   rows: { day: string; calls: number; total_tokens: number }[],
   days: number,

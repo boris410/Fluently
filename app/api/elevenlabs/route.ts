@@ -8,6 +8,7 @@ import {
   resolveSessionVoiceId,
   sessionExists,
 } from "@/lib/db";
+import { getCurrentUser } from "@/lib/current-user";
 import {
   DEFAULT_ELEVENLABS_MODEL,
   ELEVENLABS_MODELS,
@@ -33,6 +34,11 @@ function userFacingError(message: string, status: number) {
  * Without one (the /tts test page), only api_logs is written.
  */
 export async function POST(request: Request) {
+  const user = await getCurrentUser();
+  if (!user) {
+    return Response.json({ error: "請先登入" }, { status: 401 });
+  }
+
   const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
 
   if (!apiKey) {
@@ -65,10 +71,11 @@ export async function POST(request: Request) {
     : undefined;
   let sessionId = body.sessionId ?? null;
   if (scenario) {
-    if (!sessionId || !(await sessionExists(sessionId))) {
+    if (!sessionId || !(await sessionExists(sessionId, user.id))) {
       sessionId = await createSession(
         scenario.id,
         body.mode === "live" ? "live" : "script",
+        user.id,
       );
       await appendMessage(sessionId, "model", scenario.opening);
     }

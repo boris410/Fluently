@@ -1,30 +1,19 @@
-import {
-  CHARACTER_CATALOG,
-  DEFAULT_STUDENT_ID,
-  DEFAULT_STUDENT_NAME,
-  DEFAULT_VOICE_ID,
-  DEFAULT_VOICE_LABEL,
-  DEFAULT_VOICE_ROW_ID,
-  SCENE_CATALOG,
-  scenarios as scenarioCatalog,
-  type Level,
-  type RoleType,
-  type Scenario,
-} from "@/lib/scenarios";
+import { type Level, type RoleType, type Scenario } from "@/lib/scenarios";
 
 /**
  * Data layer. Server-only — never import this from a Client Component.
  *
- * Two drivers behind one async interface:
- *   - Production / `npm run preview` (Cloudflare Workers): D1 via
- *     `getCloudflareContext().env.DB`.
- *   - `next dev` (plain Node): `node:sqlite` file at `data/fluently.db`
- *     (gitignored). `node:sqlite` ships with Node 22+.
+ * One driver: Cloudflare D1 via `getCloudflareContext().env.DB`. Thanks to
+ * `initOpenNextCloudflareForDev()` in next.config.ts, the binding is also
+ * available under `next dev` (miniflare's local D1), so dev and prod share the
+ * exact same code path. Apply migrations locally with
+ * `wrangler d1 migrations apply fluently_db --local`.
  *
- * D1's API is async, so every exported function returns a Promise. The SQL
- * is portable — D1 is SQLite — so both drivers share the same statements.
- * `node:sqlite` is imported dynamically so it never reaches the Workers
- * bundle (which has no such module).
+ * D1's API is async, so every exported function returns a Promise.
+ *
+ * Multi-user: every read/write is scoped by `userId` (the better-auth
+ * `user.id`, mirrored into `sessions.user_student_id`). Callers resolve the
+ * user via `getCurrentUser()` and must pass the id in.
  */
 
 export type MessageRole = "user" | "model";
@@ -112,258 +101,18 @@ function d1Adapter(db: D1DatabaseLike): Db {
   };
 }
 
-type NodeDb = import("node:sqlite").DatabaseSync;
-
-function nodeAdapter(db: NodeDb): Db {
-  return {
-    async all(sql, params = []) {
-      return db.prepare(sql).all(...params) as never;
-    },
-    async first(sql, params = []) {
-      return (db.prepare(sql).get(...params) ?? undefined) as never;
-    },
-    async run(sql, params = []) {
-      const res = db.prepare(sql).run(...params);
-      return { lastInsertRowid: Number(res.lastInsertRowid) };
-    },
-  };
-}
-
-// --- node:sqlite bootstrap (dev only) ----------------------------------
-
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS user_students (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS scenes (
-  id         TEXT PRIMARY KEY,
-  title      TEXT NOT NULL,
-  title_zh   TEXT NOT NULL,
-  emoji      TEXT NOT NULL,
-  tint_light TEXT NOT NULL,
-  tint_dark  TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS elevenlabs_voices (
-  id       TEXT PRIMARY KEY,
-  voice_id TEXT NOT NULL,
-  label    TEXT NOT NULL,
-  is_free  INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS characters (
-  id                  TEXT PRIMARY KEY,
-  name                TEXT NOT NULL,
-  elevenlabs_voice_id TEXT NOT NULL REFERENCES elevenlabs_voices(id)
-);
-
-CREATE TABLE IF NOT EXISTS scenarios (
-  id           TEXT PRIMARY KEY,
-  scene_id     TEXT NOT NULL REFERENCES scenes(id),
-  character_id TEXT NOT NULL REFERENCES characters(id),
-  role_type    TEXT NOT NULL CHECK (role_type IN ('staff', 'friend', 'boss')),
-  title        TEXT NOT NULL,
-  title_zh     TEXT NOT NULL,
-  blurb        TEXT NOT NULL,
-  level        TEXT NOT NULL,
-  focus        TEXT NOT NULL,
-  opening      TEXT NOT NULL,
-  persona      TEXT NOT NULL,
-  sort_order   INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS sessions (
-  id              TEXT PRIMARY KEY,
-  scenario_id     TEXT NOT NULL,
-  user_student_id TEXT,
-  mode            TEXT NOT NULL DEFAULT 'script',
-  created_at      INTEGER NOT NULL,
-  updated_at      INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS messages (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id      TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  role            TEXT NOT NULL CHECK (role IN ('user', 'model')),
-  user_student_id TEXT,
-  character_id    TEXT,
-  content         TEXT NOT NULL,
-  created_at      INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS api_calls (
-  id             INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  kind           TEXT NOT NULL DEFAULT 'chat',
-  model          TEXT NOT NULL,
-  prompt_tokens  INTEGER NOT NULL DEFAULT 0,
-  output_tokens  INTEGER NOT NULL DEFAULT 0,
-  thought_tokens INTEGER NOT NULL DEFAULT 0,
-  total_tokens   INTEGER NOT NULL DEFAULT 0,
-  latency_ms     INTEGER NOT NULL DEFAULT 0,
-  ok             INTEGER NOT NULL DEFAULT 1,
-  error          TEXT,
-  created_at     INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS api_logs (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  platform        TEXT NOT NULL,
-  endpoint        TEXT NOT NULL,
-  operation       TEXT NOT NULL,
-  model           TEXT,
-  detail          TEXT,
-  session_id      TEXT,
-  user_student_id TEXT,
-  input           TEXT,
-  output          TEXT,
-  input_tokens    INTEGER NOT NULL DEFAULT 0,
-  output_tokens   INTEGER NOT NULL DEFAULT 0,
-  total_tokens    INTEGER NOT NULL DEFAULT 0,
-  status          INTEGER NOT NULL DEFAULT 0,
-  ok              INTEGER NOT NULL DEFAULT 0,
-  error           TEXT,
-  requested_at    INTEGER NOT NULL,
-  returned_at     INTEGER NOT NULL,
-  duration_ms     INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
-CREATE INDEX IF NOT EXISTS idx_calls_session ON api_calls(session_id);
-CREATE INDEX IF NOT EXISTS idx_calls_created ON api_calls(created_at);
-CREATE INDEX IF NOT EXISTS idx_calls_kind ON api_calls(kind);
-CREATE INDEX IF NOT EXISTS idx_sessions_student ON sessions(user_student_id);
-CREATE INDEX IF NOT EXISTS idx_logs_requested ON api_logs(requested_at);
-CREATE INDEX IF NOT EXISTS idx_logs_operation ON api_logs(operation);
-CREATE INDEX IF NOT EXISTS idx_scenarios_scene ON scenarios(scene_id);
-`;
-
-function nodeColumns(db: NodeDb, table: string): string[] {
-  return (
-    db.prepare(`PRAGMA table_info(${table})`).all() as unknown as {
-      name: string;
-    }[]
-  ).map((c) => c.name);
-}
-
-/** Forward-migrates an older dev database in place. */
-function nodeMigrate(db: NodeDb) {
-  db.exec("DROP TABLE IF EXISTS roles");
-  if (!nodeColumns(db, "elevenlabs_voices").includes("is_free")) {
-    db.exec(
-      "ALTER TABLE elevenlabs_voices ADD COLUMN is_free INTEGER NOT NULL DEFAULT 0",
-    );
-  }
-  const scenarioCols = nodeColumns(db, "scenarios");
-  if (!scenarioCols.includes("persona")) {
-    db.exec("ALTER TABLE scenarios ADD COLUMN persona TEXT NOT NULL DEFAULT ''");
-  }
-  if (!scenarioCols.includes("character_id")) {
-    db.exec("ALTER TABLE scenarios ADD COLUMN character_id TEXT NOT NULL DEFAULT 'bella'");
-  }
-  if (!scenarioCols.includes("role_type")) {
-    db.exec("ALTER TABLE scenarios ADD COLUMN role_type TEXT NOT NULL DEFAULT 'staff'");
-  }
-}
-
-function nodeSeed(db: NodeDb) {
-  const now = Date.now();
-
-  db.prepare(
-    `INSERT INTO user_students (id, name, created_at, updated_at)
-     VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
-  ).run(DEFAULT_STUDENT_ID, DEFAULT_STUDENT_NAME, now, now);
-
-  db.prepare(
-    `INSERT INTO elevenlabs_voices (id, voice_id, label, is_free)
-     VALUES (?, ?, ?, 1)
-     ON CONFLICT(id) DO UPDATE SET
-       voice_id = excluded.voice_id, label = excluded.label, is_free = excluded.is_free`,
-  ).run(DEFAULT_VOICE_ROW_ID, DEFAULT_VOICE_ID, DEFAULT_VOICE_LABEL);
-
-  for (const c of CHARACTER_CATALOG) {
-    db.prepare(
-      `INSERT INTO characters (id, name, elevenlabs_voice_id)
-       VALUES (?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         name = excluded.name, elevenlabs_voice_id = excluded.elevenlabs_voice_id`,
-    ).run(c.id, c.name, DEFAULT_VOICE_ROW_ID);
-  }
-
-  for (const s of SCENE_CATALOG) {
-    db.prepare(
-      `INSERT INTO scenes (id, title, title_zh, emoji, tint_light, tint_dark)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         title = excluded.title, title_zh = excluded.title_zh, emoji = excluded.emoji,
-         tint_light = excluded.tint_light, tint_dark = excluded.tint_dark`,
-    ).run(s.id, s.title, s.titleZh, s.emoji, s.tint[0], s.tint[1]);
-  }
-
-  scenarioCatalog.forEach((sc, index) => {
-    db.prepare(
-      `INSERT INTO scenarios
-         (id, scene_id, character_id, role_type, title, title_zh, blurb, level, focus, opening, persona, sort_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         scene_id = excluded.scene_id, character_id = excluded.character_id,
-         role_type = excluded.role_type, title = excluded.title, title_zh = excluded.title_zh,
-         blurb = excluded.blurb, level = excluded.level, focus = excluded.focus,
-         opening = excluded.opening, persona = excluded.persona, sort_order = excluded.sort_order`,
-    ).run(
-      sc.id,
-      sc.sceneId,
-      sc.characterId,
-      sc.roleType,
-      sc.title,
-      sc.titleZh,
-      sc.blurb,
-      sc.level,
-      JSON.stringify(sc.focus),
-      sc.opening,
-      sc.persona,
-      index,
-    );
-  });
-}
-
-// --- driver selection --------------------------------------------------
-
-const globalForDb = globalThis as unknown as { __fluentlyNodeDb?: NodeDb };
-
-async function openNodeDb(): Promise<NodeDb> {
-  if (globalForDb.__fluentlyNodeDb) return globalForDb.__fluentlyNodeDb;
-  const { DatabaseSync } = await import("node:sqlite");
-  const { mkdirSync } = await import("node:fs");
-  const { join } = await import("node:path");
-  const dir = join(process.cwd(), "data");
-  mkdirSync(dir, { recursive: true });
-  const db = new DatabaseSync(join(dir, "fluently.db"));
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
-  db.exec(SCHEMA);
-  nodeMigrate(db);
-  nodeSeed(db);
-  globalForDb.__fluentlyNodeDb = db;
-  return db;
-}
+// --- driver ------------------------------------------------------------
 
 async function getDb(): Promise<Db> {
-  // On Workers this returns the D1 binding; in `next dev` it throws and we
-  // fall back to node:sqlite.
-  try {
-    const { getCloudflareContext } = await import("@opennextjs/cloudflare");
-    const { env } = getCloudflareContext();
-    const d1 = (env as unknown as { DB?: D1DatabaseLike }).DB;
-    if (d1) return d1Adapter(d1);
-  } catch {
-    // Not running on Cloudflare — use the local node:sqlite file.
+  const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+  const { env } = await getCloudflareContext({ async: true });
+  const d1 = (env as unknown as { DB?: D1DatabaseLike }).DB;
+  if (!d1) {
+    throw new Error(
+      "D1 binding `DB` 不存在。本機請先跑 `wrangler d1 migrations apply fluently_db --local`。",
+    );
   }
-  return nodeAdapter(await openNodeDb());
+  return d1Adapter(d1);
 }
 
 // --- scenarios ---------------------------------------------------------
@@ -485,8 +234,8 @@ export type SessionMode = "script" | "live";
 
 export async function createSession(
   scenarioId: string,
-  mode: SessionMode = "script",
-  userStudentId: string = DEFAULT_STUDENT_ID,
+  mode: SessionMode,
+  userId: string,
 ): Promise<string> {
   const db = await getDb();
   const id = crypto.randomUUID();
@@ -494,14 +243,21 @@ export async function createSession(
   await db.run(
     `INSERT INTO sessions (id, scenario_id, user_student_id, mode, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, scenarioId, userStudentId, mode, now, now],
+    [id, scenarioId, userId, mode, now, now],
   );
   return id;
 }
 
-export async function sessionExists(id: string): Promise<boolean> {
+/** True only when the session exists AND belongs to this user. */
+export async function sessionExists(
+  id: string,
+  userId: string,
+): Promise<boolean> {
   const db = await getDb();
-  return !!(await db.first("SELECT 1 AS one FROM sessions WHERE id = ?", [id]));
+  return !!(await db.first(
+    "SELECT 1 AS one FROM sessions WHERE id = ? AND user_student_id = ?",
+    [id, userId],
+  ));
 }
 
 export async function appendMessage(
@@ -560,18 +316,22 @@ export async function recordCall(call: {
   );
 }
 
-// --- reads -------------------------------------------------------------
+// --- reads (all scoped by userId) --------------------------------------
 
 export async function getHistory(
   sessionId: string,
+  userId: string,
   limit = 40,
 ): Promise<StoredMessage[]> {
   const db = await getDb();
   return db.all<StoredMessage>(
     `SELECT * FROM (
-       SELECT * FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?
+       SELECT m.* FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+       WHERE m.session_id = ? AND s.user_student_id = ?
+       ORDER BY m.id DESC LIMIT ?
      ) ORDER BY id ASC`,
-    [sessionId, limit],
+    [sessionId, userId, limit],
   );
 }
 
@@ -586,21 +346,25 @@ export type UsageTotals = {
   failures: number;
 };
 
-export async function getTotals(kind?: CallKind): Promise<UsageTotals> {
+export async function getTotals(
+  userId: string,
+  kind?: CallKind,
+): Promise<UsageTotals> {
   const db = await getDb();
   const row = await db.first<UsageTotals>(
     `SELECT
        COUNT(*)                                AS calls,
-       COUNT(DISTINCT session_id)              AS sessions,
-       COALESCE(SUM(prompt_tokens), 0)         AS prompt_tokens,
-       COALESCE(SUM(output_tokens), 0)         AS output_tokens,
-       COALESCE(SUM(thought_tokens), 0)        AS thought_tokens,
-       COALESCE(SUM(total_tokens), 0)          AS total_tokens,
-       COALESCE(CAST(AVG(latency_ms) AS INTEGER), 0) AS avg_latency,
-       COALESCE(SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0) AS failures
-     FROM api_calls
-     WHERE (? IS NULL OR kind = ?)`,
-    [kind ?? null, kind ?? null],
+       COUNT(DISTINCT c.session_id)            AS sessions,
+       COALESCE(SUM(c.prompt_tokens), 0)       AS prompt_tokens,
+       COALESCE(SUM(c.output_tokens), 0)       AS output_tokens,
+       COALESCE(SUM(c.thought_tokens), 0)      AS thought_tokens,
+       COALESCE(SUM(c.total_tokens), 0)        AS total_tokens,
+       COALESCE(CAST(AVG(c.latency_ms) AS INTEGER), 0) AS avg_latency,
+       COALESCE(SUM(CASE WHEN c.ok = 0 THEN 1 ELSE 0 END), 0) AS failures
+     FROM api_calls c
+     JOIN sessions s ON s.id = c.session_id
+     WHERE s.user_student_id = ? AND (? IS NULL OR c.kind = ?)`,
+    [userId, kind ?? null, kind ?? null],
   );
   return (
     row ?? {
@@ -625,7 +389,9 @@ export type ScenarioUsage = {
   output_tokens: number;
 };
 
-export async function getUsageByScenario(): Promise<ScenarioUsage[]> {
+export async function getUsageByScenario(
+  userId: string,
+): Promise<ScenarioUsage[]> {
   const db = await getDb();
   return db.all<ScenarioUsage>(
     `SELECT s.scenario_id,
@@ -636,9 +402,10 @@ export async function getUsageByScenario(): Promise<ScenarioUsage[]> {
             COALESCE(SUM(c.output_tokens), 0) AS output_tokens
      FROM api_calls c
      JOIN sessions s ON s.id = c.session_id
-     WHERE c.kind = 'chat'
+     WHERE c.kind = 'chat' AND s.user_student_id = ?
      GROUP BY s.scenario_id
      ORDER BY total_tokens DESC`,
+    [userId],
   );
 }
 
@@ -648,17 +415,22 @@ export type DailyUsage = {
   total_tokens: number;
 };
 
-export async function getDailyUsage(days = 14): Promise<DailyUsage[]> {
+export async function getDailyUsage(
+  userId: string,
+  days = 14,
+): Promise<DailyUsage[]> {
   const db = await getDb();
   return db.all<DailyUsage>(
-    `SELECT date(created_at / 1000, 'unixepoch', 'localtime') AS day,
+    `SELECT date(c.created_at / 1000, 'unixepoch', 'localtime') AS day,
             COUNT(*) AS calls,
-            COALESCE(SUM(total_tokens), 0) AS total_tokens
-     FROM api_calls
+            COALESCE(SUM(c.total_tokens), 0) AS total_tokens
+     FROM api_calls c
+     JOIN sessions s ON s.id = c.session_id
+     WHERE s.user_student_id = ?
      GROUP BY day
      ORDER BY day DESC
      LIMIT ?`,
-    [days],
+    [userId, days],
   );
 }
 
@@ -671,24 +443,35 @@ export type SessionSummary = {
   total_tokens: number;
 };
 
-export async function getRecentSessions(limit = 12): Promise<SessionSummary[]> {
+export async function getRecentSessions(
+  userId: string,
+  limit = 12,
+): Promise<SessionSummary[]> {
   const db = await getDb();
   return db.all<SessionSummary>(
     `SELECT s.id, s.scenario_id, s.created_at, s.updated_at,
             (SELECT COUNT(*) FROM api_calls c WHERE c.session_id = s.id AND c.kind = 'chat') AS turns,
             (SELECT COALESCE(SUM(total_tokens), 0) FROM api_calls c WHERE c.session_id = s.id) AS total_tokens
      FROM sessions s
+     WHERE s.user_student_id = ?
      ORDER BY s.updated_at DESC
      LIMIT ?`,
-    [limit],
+    [userId, limit],
   );
 }
 
-export async function getRecentCalls(limit = 20): Promise<ApiCall[]> {
+export async function getRecentCalls(
+  userId: string,
+  limit = 20,
+): Promise<ApiCall[]> {
   const db = await getDb();
-  return db.all<ApiCall>("SELECT * FROM api_calls ORDER BY id DESC LIMIT ?", [
-    limit,
-  ]);
+  return db.all<ApiCall>(
+    `SELECT c.* FROM api_calls c
+     JOIN sessions s ON s.id = c.session_id
+     WHERE s.user_student_id = ?
+     ORDER BY c.id DESC LIMIT ?`,
+    [userId, limit],
+  );
 }
 
 export type SessionStats = {
@@ -698,15 +481,20 @@ export type SessionStats = {
   total_tokens: number;
 };
 
-export async function getSessionStats(sessionId: string): Promise<SessionStats> {
+export async function getSessionStats(
+  sessionId: string,
+  userId: string,
+): Promise<SessionStats> {
   const db = await getDb();
   const row = await db.first<SessionStats>(
     `SELECT COUNT(*) AS calls,
-            COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-            COALESCE(SUM(output_tokens), 0) AS output_tokens,
-            COALESCE(SUM(total_tokens), 0)  AS total_tokens
-     FROM api_calls WHERE session_id = ? AND ok = 1 AND kind = 'chat'`,
-    [sessionId],
+            COALESCE(SUM(c.prompt_tokens), 0) AS prompt_tokens,
+            COALESCE(SUM(c.output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(c.total_tokens), 0)  AS total_tokens
+     FROM api_calls c
+     JOIN sessions s ON s.id = c.session_id
+     WHERE c.session_id = ? AND s.user_student_id = ? AND c.ok = 1 AND c.kind = 'chat'`,
+    [sessionId, userId],
   );
   return (
     row ?? { calls: 0, prompt_tokens: 0, output_tokens: 0, total_tokens: 0 }
@@ -807,11 +595,15 @@ export async function logApiCall(record: {
   }
 }
 
-export async function getRecentLogs(limit = 30): Promise<ApiLog[]> {
+export async function getRecentLogs(
+  userId: string,
+  limit = 30,
+): Promise<ApiLog[]> {
   const db = await getDb();
-  return db.all<ApiLog>("SELECT * FROM api_logs ORDER BY id DESC LIMIT ?", [
-    limit,
-  ]);
+  return db.all<ApiLog>(
+    "SELECT * FROM api_logs WHERE user_student_id = ? ORDER BY id DESC LIMIT ?",
+    [userId, limit],
+  );
 }
 
 export type LogSummary = {
@@ -823,7 +615,7 @@ export type LogSummary = {
   total_tokens: number;
 };
 
-export async function getLogSummary(): Promise<LogSummary[]> {
+export async function getLogSummary(userId: string): Promise<LogSummary[]> {
   const db = await getDb();
   return db.all<LogSummary>(
     `SELECT operation, platform,
@@ -832,8 +624,10 @@ export async function getLogSummary(): Promise<LogSummary[]> {
             COALESCE(CAST(AVG(duration_ms) AS INTEGER), 0) AS avg_ms,
             COALESCE(SUM(total_tokens), 0) AS total_tokens
      FROM api_logs
+     WHERE user_student_id = ?
      GROUP BY operation, platform
      ORDER BY calls DESC`,
+    [userId],
   );
 }
 
@@ -844,9 +638,9 @@ export type LogFilter = {
 };
 
 /** Builds the shared WHERE clause so list and count never drift apart. */
-function logWhere(filter: LogFilter) {
-  const clauses: string[] = [];
-  const params: SqlParam[] = [];
+function logWhere(userId: string, filter: LogFilter) {
+  const clauses: string[] = ["user_student_id = ?"];
+  const params: SqlParam[] = [userId];
 
   if (filter.operation) {
     clauses.push("operation = ?");
@@ -863,27 +657,31 @@ function logWhere(filter: LogFilter) {
   }
 
   return {
-    sql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
+    sql: `WHERE ${clauses.join(" AND ")}`,
     params,
   };
 }
 
 export async function getLogs(
+  userId: string,
   filter: LogFilter,
   limit: number,
   offset: number,
 ): Promise<ApiLog[]> {
   const db = await getDb();
-  const { sql, params } = logWhere(filter);
+  const { sql, params } = logWhere(userId, filter);
   return db.all<ApiLog>(
     `SELECT * FROM api_logs ${sql} ORDER BY id DESC LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   );
 }
 
-export async function countLogs(filter: LogFilter): Promise<number> {
+export async function countLogs(
+  userId: string,
+  filter: LogFilter,
+): Promise<number> {
   const db = await getDb();
-  const { sql, params } = logWhere(filter);
+  const { sql, params } = logWhere(userId, filter);
   const row = await db.first<{ n: number }>(
     `SELECT COUNT(*) AS n FROM api_logs ${sql}`,
     params,
@@ -891,11 +689,12 @@ export async function countLogs(filter: LogFilter): Promise<number> {
   return row?.n ?? 0;
 }
 
-/** Distinct operations present, for building the filter row. */
-export async function getLogOperations(): Promise<string[]> {
+/** Distinct operations present for this user, for building the filter row. */
+export async function getLogOperations(userId: string): Promise<string[]> {
   const db = await getDb();
   const rows = await db.all<{ operation: string }>(
-    "SELECT DISTINCT operation FROM api_logs ORDER BY operation",
+    "SELECT DISTINCT operation FROM api_logs WHERE user_student_id = ? ORDER BY operation",
+    [userId],
   );
   return rows.map((r) => r.operation);
 }

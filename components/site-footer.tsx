@@ -8,7 +8,7 @@ export function SiteFooter() {
           <Mark className="h-4 w-4 text-clay" />
           <span>Fluently — 你的 AI 英文口說夥伴</span>
         </div>
-        <p>對話由 Gemini 驅動 · 進度存在你自己的 SQLite</p>
+        <p>對話由 Gemini 驅動 · 進度存在你的帳號</p>
       </div>
     </footer>
   );

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { getCurrentUser } from "@/lib/current-user";
 import {
   type ApiLog,
   type LogFilter,
@@ -21,6 +23,9 @@ export const dynamic = "force-dynamic";
 const PAGE_SIZE = 25;
 
 export default async function LogsPage(props: PageProps<"/logs">) {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const params = await props.searchParams;
   const one = (key: string) =>
     typeof params[key] === "string" ? (params[key] as string) : undefined;
@@ -33,14 +38,14 @@ export default async function LogsPage(props: PageProps<"/logs">) {
   const page = Math.max(1, Number(one("page") ?? "1") || 1);
 
   const filter: LogFilter = { operation, status, q };
-  const total = await countLogs(filter);
+  const total = await countLogs(user.id, filter);
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const current = Math.min(page, pages);
   const [logs, operations, summary, grandTotal] = await Promise.all([
-    getLogs(filter, PAGE_SIZE, (current - 1) * PAGE_SIZE),
-    getLogOperations(),
-    getLogSummary(),
-    countLogs({}),
+    getLogs(user.id, filter, PAGE_SIZE, (current - 1) * PAGE_SIZE),
+    getLogOperations(user.id),
+    getLogSummary(user.id),
+    countLogs(user.id, {}),
   ]);
 
   const href = (patch: Record<string, string | undefined>) => {

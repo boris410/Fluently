@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Wordmark } from "@/components/logo";
 import { SettingsMenu } from "@/components/settings-menu";
+import { UserMenu } from "@/components/user-menu";
 
 export function SiteHeader({ compact = false }: { compact?: boolean }) {
   return (
@@ -25,12 +26,7 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
             </>
           )}
           <SettingsMenu />
-          <Link
-            href="/scenarios"
-            className="ml-2 rounded-full border border-line-strong px-4 py-2 font-medium text-ink transition-colors hover:border-clay hover:text-clay"
-          >
-            開始練習
-          </Link>
+          <UserMenu />
         </nav>
       </div>
     </header>

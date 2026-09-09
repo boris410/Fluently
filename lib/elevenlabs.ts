@@ -2,7 +2,7 @@
  * ElevenLabs TTS client.
  *
  * Same logging contract as gemini.ts: emit `onCall` and never import
- * `node:sqlite`. The API key is passed in — this file never reads env.
+ * the database layer. The API key is passed in — this file never reads env.
  */
 
 export const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";

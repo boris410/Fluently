@@ -1,11 +1,6 @@
 -- 0002_seed: base data. Idempotent so re-applying is safe.
-
--- Default learner ----------------------------------------------------------
-INSERT INTO user_students (id, name, created_at, updated_at)
-VALUES ('default', 'Learner',
-        CAST(strftime('%s','now') AS INTEGER) * 1000,
-        CAST(strftime('%s','now') AS INTEGER) * 1000)
-ON CONFLICT(id) DO NOTHING;
+-- Learners are created on first Google sign-in (better-auth databaseHook),
+-- not seeded here.
 
 -- Voices -------------------------------------------------------------------
 INSERT INTO elevenlabs_voices (id, voice_id, label, is_free)

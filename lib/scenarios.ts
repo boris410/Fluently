@@ -28,9 +28,7 @@ export type Scenario = {
   tint: [string, string];
 };
 
-/** Seed ids — stable, used as SQLite/D1 primary keys. */
-export const DEFAULT_STUDENT_ID = "default";
-export const DEFAULT_STUDENT_NAME = "Learner";
+/** Seed ids — stable, used as D1 primary keys. */
 /** Row id of the single seeded ElevenLabs voice (Bella). */
 export const DEFAULT_VOICE_ROW_ID = "bella";
 export const DEFAULT_VOICE_ID = "EXAVITQu4vr4xnSDxMaL";

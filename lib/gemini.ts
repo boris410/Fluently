@@ -5,7 +5,7 @@ import type { Scenario } from "@/lib/scenarios";
  *
  * Uses `generateContent` (v1beta) rather than the newer Interactions API:
  * Interactions keeps conversation history on Google's side, and this app
- * deliberately keeps its memory in local SQLite.
+ * deliberately keeps its memory in D1.
  * Docs: https://ai.google.dev/api/generate-content
  */
 

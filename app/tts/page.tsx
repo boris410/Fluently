@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ElevenLabsTtsTester } from "@/components/elevenlabs-tts-tester";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { getCurrentUser } from "@/lib/current-user";
 import { defaultVoiceId } from "@/lib/db";
 
 export const metadata: Metadata = {
@@ -13,6 +15,9 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function TtsPage() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const configured = Boolean(process.env.ELEVENLABS_API_KEY?.trim());
   const voiceId = await defaultVoiceId();
 

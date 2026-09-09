@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { ScenarioPicker } from "@/components/scenario-picker";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
+import { getCurrentUser } from "@/lib/current-user";
 import { listScenarios } from "@/lib/db";
 
 export const metadata: Metadata = {
@@ -13,6 +15,9 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function ScenariosPage() {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const scenarios = await listScenarios();
   return (
     <>

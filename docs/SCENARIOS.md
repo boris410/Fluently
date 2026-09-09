@@ -1,14 +1,14 @@
 # Fluently — 對話情境規格
 
-> 目前 8 個情境（一場景一個）的完整記錄。**執行時資料在 DB**（`scenes` / `scenarios` / `characters`），
-> 正式是 Cloudflare D1、dev 是 `node:sqlite`；seed 目錄在 [`lib/scenarios.ts`](../lib/scenarios.ts)、
+> 目前 8 個情境（一場景一個）的完整記錄。**執行時資料在 D1**（`scenes` / `scenarios` / `characters`），
+> 正式與 `next dev` 都走 Cloudflare D1（本機是 miniflare）；seed 目錄在 [`lib/scenarios.ts`](../lib/scenarios.ts)、
 > 正式 seed 在 `migrations/0002_seed.sql`。
 > 這份文件是說明書：欄位定義、每個情境的設定、以及新增情境的規則。
 >
 > 角色**沒有獨立的 `roles` 表**：用 `scenarios.role_type`（`staff`/`friend`/`boss`）表示，
 > 決策見 [DATA.md §8 ADR-002](DATA.md)。目前所有情境都由 **Bella** 演出（同一顆聲音）。
 >
-> 兩邊不一致時以 `lib/scenarios.ts` 的 seed 為準（dev 開庫時 upsert），並修正這份文件。
+> 兩邊不一致時以 `lib/scenarios.ts` 的 seed 為準（寫進 `migrations/0002_seed.sql`），並修正這份文件。
 
 ---
 
@@ -205,7 +205,7 @@ type ScenarioCatalog = Scenario & {
 3. `tint` 挑一組還沒被用過的低飽和色，淺色亮度約 90%、深色約 20%（寫在對應的 scene 上）。
 4. **同步 `migrations/0002_seed.sql`**（正式 D1 的 seed 來源）——加一筆對應的 `INSERT ... ON CONFLICT`；若改了 schema 另開一支新的 migration。
 5. 回來更新這份文件的第 3 節總表與第 4 節細節。
-6. dev：`npm run dev`（`nodeSeed()` 會 upsert；schema 大改可先刪 `data/fluently.db`）。正式：`wrangler d1 migrations apply fluently_db --remote`。跑 `npm run build`。
+6. 同步 `migrations/0002_seed.sql` 後跑 `wrangler d1 migrations apply fluently_db --local`（正式再 `--remote`）。跑 `npm run build`。
 
 檢查清單：
 
@@ -233,4 +233,4 @@ type ScenarioCatalog = Scenario & {
 `id` 現在是 `sessions.scenario_id` 與 `scenarios.id` 的值，
 **更加不可以更動**——改了會讓既有的用量紀錄對不上情境。
 
-執行時情境已在 DB；dev 改 seed 後重啟 dev server（`nodeSeed()` upsert），正式則套用 migration。
+執行時情境已在 D1；改 seed 後要更新 `migrations/0002_seed.sql` 並套用 migration。

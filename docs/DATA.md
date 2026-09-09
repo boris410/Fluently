@@ -1,45 +1,44 @@
 # Fluently — 資料層與 AI 串接
 
 > 記錄 DB schema、Gemini 串接方式、API key 的流向，以及 token/來回次數是怎麼算出來的。
-> 程式碼在 [`lib/db.ts`](../lib/db.ts)、[`lib/gemini.ts`](../lib/gemini.ts)、[`app/api/chat/route.ts`](../app/api/chat/route.ts)。
+> 程式碼在 [`lib/db.ts`](../lib/db.ts)、[`lib/gemini.ts`](../lib/gemini.ts)、[`app/api/chat/route.ts`](../app/api/chat/route.ts)、[`lib/auth.ts`](../lib/auth.ts)。
 > 改 schema 或改串接方式時，**同一個 commit 內更新這份文件**。
 
 ---
 
-## 1. 資料庫（D1 / node:sqlite 雙驅動）
+## 1. 資料庫（Cloudflare D1）
 
-同一套 SQL，兩個驅動，藏在 [`lib/db.ts`](../lib/db.ts) 的一層 async adapter 後面：
+單一驅動：Cloudflare D1，藏在 [`lib/db.ts`](../lib/db.ts) 的 async adapter 後面。
 
 | 環境 | 驅動 | 取得方式 |
 |---|---|---|
-| 正式 / `npm run preview`（Cloudflare Workers） | **D1** | `getCloudflareContext().env.DB` |
-| `next dev`（純 Node） | `node:sqlite` | `data/fluently.db`（已 gitignore） |
+| 正式 / `npm run preview`（Cloudflare Workers） | **D1** | `getCloudflareContext({ async: true }).env.DB` |
+| `next dev` | **同一顆 local D1**（miniflare） | `initOpenNextCloudflareForDev()` 讓 `getCloudflareContext()` 在 Node 下也能拿到 `env.DB` |
 
-D1 就是 SQLite，方言相同，所以查詢字串兩邊共用；差別只在 **D1 是 async**，
-因此 `lib/db.ts` 每個匯出函式都回傳 `Promise`，呼叫端一律 `await`。
-`node:sqlite` 是**動態 import**（`await import("node:sqlite")`），確保它不會被打進
-Workers bundle（那個 runtime 沒有 `node:sqlite`）。驅動選擇：先試 `getCloudflareContext()`
-拿 `env.DB`，拿不到（`next dev`）就退回 `node:sqlite`。
+`next.config.ts` 呼叫 `initOpenNextCloudflareForDev()`，所以 **dev 與正式共用同一條程式碼**，不再走 `node:sqlite`。本機資料在 `.wrangler/state/v3/d1/`，用 wrangler migrations 維護：
 
-- 正式資料靠 **wrangler migrations**（`migrations/0001_init.sql` 建表、`0002_seed.sql` 種資料），
-  部署時 `wrangler d1 migrations apply fluently_db --remote`。
-- 本機 `next dev` 走 `node:sqlite`：開庫時跑 `SCHEMA` + `nodeMigrate()` + `nodeSeed()`，
-  免 wrangler 也有資料。`WAL` / `foreign_keys` 與 `globalThis` 連線快取只在這條路。
+```bash
+wrangler d1 migrations apply fluently_db --local   # 本機
+wrangler d1 migrations apply fluently_db --remote  # 正式
+```
 
-> Node 會印 `ExperimentalWarning: SQLite is an experimental feature`——這是預期的，不是錯誤。
+D1 就是 SQLite，因此 `lib/db.ts` 每個匯出函式都回傳 `Promise`，呼叫端一律 `await`。
+
+多使用者：登入走 **better-auth + Google**。帳號存在 `user` / `session` / `account` / `verification`（`migrations/0003_auth.sql`）。首次登入時 databaseHook 會用同一個 `user.id` 在 `user_students` 建一列學習者檔案。練習資料（`sessions` / `messages` / `api_calls` / `api_logs`）都以 `user_student_id = user.id` 隔離；沒登入不能進 `/scenarios`、`/chat`、`/usage`、`/logs`、`/tts`。
+
+Auth 變數：本機 `next dev` 讀 `.env.local`；`npm run preview` 讀 `.dev.vars`（兩份都要有同一組）。正式環境用 `wrangler secret put` 設 `BETTER_AUTH_SECRET`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`。
 
 ### Schema
 
-正式的權威來源是 `migrations/0001_init.sql`；下面同一份 schema 也存在 `lib/db.ts` 的
-`SCHEMA` 字串供 dev 用。`--` 是欄位註記。
+正式的權威來源是 `migrations/` 底下的 SQL。`--` 是欄位註記。
 
 ```sql
 PRAGMA foreign_keys = ON;
 
--- 學習者（本機可切換；尚無登入）
+-- 學習者檔案；id 等於 better-auth `user.id`，首次 Google 登入時由 databaseHook 建立
 CREATE TABLE IF NOT EXISTS user_students (
-  id         TEXT PRIMARY KEY, -- 學習者 id；seed 預設 'default'
-  name       TEXT NOT NULL,    -- 顯示名稱，例如 Learner
+  id         TEXT PRIMARY KEY, -- = user.id，不再 seed 'default'
+  name       TEXT NOT NULL,    -- 顯示名稱（來自 Google 名稱）
   created_at INTEGER NOT NULL, -- 建立時間 epoch ms
   updated_at INTEGER NOT NULL  -- 最後更新 epoch ms
 );
@@ -156,21 +155,72 @@ CREATE INDEX IF NOT EXISTS idx_scenarios_scene ON scenarios(scene_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_student ON sessions(user_student_id);
 ```
 
-### 遷移與種子
+better-auth 的四張表（`migrations/0003_auth.sql`）：
 
-**正式（D1）**：schema 與資料都走 wrangler migrations——
+```sql
+CREATE TABLE IF NOT EXISTS "user" (
+  "id"            TEXT NOT NULL PRIMARY KEY,
+  "name"          TEXT NOT NULL,
+  "email"         TEXT NOT NULL UNIQUE,
+  "emailVerified" INTEGER NOT NULL,
+  "image"         TEXT,
+  "createdAt"     DATE NOT NULL,
+  "updatedAt"     DATE NOT NULL
+);
 
-```bash
-wrangler d1 migrations apply fluently_db --local   # 本機 preview
-wrangler d1 migrations apply fluently_db --remote  # 正式，部署時執行
+CREATE TABLE IF NOT EXISTS "session" (
+  "id"        TEXT NOT NULL PRIMARY KEY,
+  "expiresAt" DATE NOT NULL,
+  "token"     TEXT NOT NULL UNIQUE,
+  "createdAt" DATE NOT NULL,
+  "updatedAt" DATE NOT NULL,
+  "ipAddress" TEXT,
+  "userAgent" TEXT,
+  "userId"    TEXT NOT NULL REFERENCES "user" ("id")
+);
+
+CREATE TABLE IF NOT EXISTS "account" (
+  "id"                    TEXT NOT NULL PRIMARY KEY,
+  "accountId"             TEXT NOT NULL,
+  "providerId"            TEXT NOT NULL,
+  "userId"                TEXT NOT NULL REFERENCES "user" ("id"),
+  "accessToken"           TEXT,
+  "refreshToken"          TEXT,
+  "idToken"               TEXT,
+  "accessTokenExpiresAt"  DATE,
+  "refreshTokenExpiresAt" DATE,
+  "scope"                 TEXT,
+  "password"              TEXT,
+  "createdAt"             DATE NOT NULL,
+  "updatedAt"             DATE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "verification" (
+  "id"         TEXT NOT NULL PRIMARY KEY,
+  "identifier" TEXT NOT NULL,
+  "value"      TEXT NOT NULL,
+  "expiresAt"  DATE NOT NULL,
+  "createdAt"  DATE,
+  "updatedAt"  DATE
+);
 ```
 
-`migrations/0001_init.sql` 建表（含 `DROP TABLE IF EXISTS roles`），`0002_seed.sql`
-用 `INSERT ... ON CONFLICT` 種入基礎資料（可重複套用）。
+### 遷移與種子
 
-**本機（`node:sqlite`）**：`openNodeDb()` 開庫時跑 `SCHEMA` + `nodeMigrate()`（`ALTER` 補欄位、
-丟掉舊 `roles` 表）+ `nodeSeed()`（upsert [`lib/scenarios.ts`](../lib/scenarios.ts) 目錄）。
-schema 大改時可直接刪 `data/fluently.db` 讓它重建。
+schema 與資料都走 wrangler migrations——
+
+```bash
+wrangler d1 migrations apply fluently_db --local   # 本機（next dev / preview）
+wrangler d1 migrations apply fluently_db --remote  # 正式
+```
+
+| 檔案 | 作用 |
+|---|---|
+| `0001_init.sql` | 建表（含 `DROP TABLE IF EXISTS roles`） |
+| `0001_schema_update.sql` | 給舊遠端 DB 補 `is_free` / `role_type` 等欄位 |
+| `0002_seed.sql` | 場景、Bella 音色、8 個情境（**不**再種 `default` 學習者） |
+| `0003_auth.sql` | better-auth 的 `user` / `session` / `account` / `verification` |
+| `0004_user_link.sql` | 刪掉還存在的 seed `default` 學習者（沒有 sessions 才刪） |
 
 列表與對話頁的 `getScenario()` / `listScenarios()` **讀 DB**，不再直接讀 TS 陣列。
 
@@ -178,10 +228,13 @@ schema 大改時可直接刪 `data/fluently.db` 讓它重建。
 
 `api_logs` 的 `session_id` / `user_student_id` 只是關聯用，**沒有外鍵**。
 沒有 `roles` 表：角色類型是 `scenarios.role_type` 欄位；聲音經由
-`scenario → character → voice` 推導。
+`scenario → character → voice` 推導。`user_students.id` 與 better-auth `user.id` 是同一個值。
 
 ```mermaid
 erDiagram
+  user ||--o| user_students : "same id"
+  user ||--o{ session : has
+  user ||--o{ account : "google"
   user_students ||--o{ sessions : practices
   scenes ||--o{ scenarios : contains
   characters ||--o{ scenarios : plays
@@ -194,11 +247,14 @@ erDiagram
   messages }o--o| characters : tutor
 ```
 
+`session`（better-auth 登入 cookie）與 `sessions`（一段練習對話）是兩張不同的表，不要搞混。
+
 ### 表的分工
 
 | 表 | 回答的問題 |
 |---|---|
-| `user_students` | 誰在練 |
+| `user` / `session` / `account` / `verification` | 誰登入了（Google OAuth + cookie） |
+| `user_students` | 學習者檔案（id = `user.id`） |
 | `scenes` / `scenarios` / `characters` | 在哪、練什麼場面（含 `role_type` 演哪種角色）、由誰扮演 |
 | `elevenlabs_voices` | 那個角色用哪顆 ElevenLabs 音色（`is_free` 標記免費方案可用） |
 | `sessions` | 這段練習屬於誰、哪個情境 |
@@ -279,7 +335,7 @@ Google 現在推薦新專案用 Interactions API，但它**把對話歷史存在
 ## 3.5 呼叫紀錄怎麼收集
 
 `lib/gemini.ts` **會被 client 端 import**（`lib/settings.ts`、`components/settings-menu.tsx`
-需要 `VOICES`、`DEFAULT_MODEL` 這些常數），所以**那個檔案裡絕對不能 import `node:sqlite`**，
+需要 `VOICES`、`DEFAULT_MODEL` 這些常數），所以**那個檔案裡絕對不能 import 資料庫**，
 否則前端 build 會炸。
 
 因此改用回呼：`generateReply` / `synthesizeSpeech` / `verifyKey` 都接受一個
@@ -490,12 +546,23 @@ Voice Library 的音色在免費方案會回 402，畫面會說明原因並改�
   - 需要「跨情境角色分類」時用一個欄位就夠；日後真要做角色層級設定，
     再升級成獨立表並補一次 migration 也不遲。
 
+### ADR-003：Google 登入（better-auth）+ D1-only
+
+- **日期**：2026-09-09
+- **背景**：要把對話與用量綁到真實帳號，並在 Cloudflare Workers 上跑 OAuth。
+- **決定**：
+  - 只用 **Google** 登入（Facebook 的 App Review 成本太高，之後再加）。
+- 用 **better-auth**（內建 D1 dialect，把 `env.DB` 直接當 `database`）+ session cookie 做 gating。
+  - 為了讓 better-auth 在 `next dev` 拿到 D1 binding，`next.config.ts` 呼叫
+    `initOpenNextCloudflareForDev()`。副作用是 **`node:sqlite` 退役**，dev/prod 都走 local/remote D1。
+  - `user_students.id` = better-auth `user.id`；首次登入由 `databaseHooks.user.create.after` 建立。
+  - Next 16 的路由保護寫在 [`proxy.ts`](../proxy.ts)（Next 16 取代了 `middleware.ts`）。
+- **理由**：better-auth 對 D1/Workers 支援最好；延遲 `getAuth()` 避開「模組頂層拿不到 binding」的坑。
+
 ### ADR-001：資料層搬到 D1（保留 node:sqlite 供 dev）
 
-- **日期**：2026-09-08
+- **日期**：2026-09-08（**已被 ADR-003 取代**：`node:sqlite` 已退役）
 - **背景**：要部署到 Cloudflare，但 Workers runtime 沒有 `node:sqlite`、也沒有可寫檔案系統，
   DB 頁面會 500。
-- **決定**：正式用 **Cloudflare D1**（`env.DB`，OpenNext 提供 context）；`next dev` 仍用
-  `node:sqlite`。兩者共用 SQL，藏在一層 async adapter 後面。
-- **理由**：D1 就是 SQLite，SQL 可共用；本機保留 `node:sqlite` 讓 dev 免 wrangler、迭代快。
-  代價是所有 DB 函式改為 async（D1 API 是非同步的）。
+- **當時決定**：正式用 **Cloudflare D1**；`next dev` 仍用 `node:sqlite`。
+- **現況**：見 ADR-003，dev 也走 miniflare D1。

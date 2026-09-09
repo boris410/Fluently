@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { ChatRoom } from "@/components/chat-room";
 import { LiveRoom } from "@/components/live-room";
 import { ModePicker } from "@/components/mode-picker";
 import { SettingsMenu } from "@/components/settings-menu";
+import { getCurrentUser } from "@/lib/current-user";
 import { getHistory, getScenario, getSessionStats, sessionExists } from "@/lib/db";
 import { LEVELS } from "@/lib/scenarios";
 import type { ChatTurn } from "@/lib/use-conversation";
@@ -17,6 +18,9 @@ export async function generateMetadata(props: PageProps<"/chat/[id]">) {
 }
 
 export default async function ChatPage(props: PageProps<"/chat/[id]">) {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
   const { id } = await props.params;
   const scenario = await getScenario(id);
   if (!scenario) notFound();
@@ -24,9 +28,10 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
   const level = LEVELS.find((l) => l.id === scenario.level)!;
   const { session, mode: modeParam } = await props.searchParams;
 
-  // `?session=<id>` resumes an earlier conversation from the database.
+  // `?session=<id>` resumes an earlier conversation from the database — but
+  // only if it belongs to the logged-in user.
   const resumeId =
-    typeof session === "string" && (await sessionExists(session))
+    typeof session === "string" && (await sessionExists(session, user.id))
       ? session
       : null;
 
@@ -36,7 +41,7 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
     modeParam === "live" ? "live" : modeParam === "script" || resumeId ? "script" : null;
 
   const turns: ChatTurn[] = resumeId
-    ? (await getHistory(resumeId)).map((m) => ({
+    ? (await getHistory(resumeId, user.id)).map((m) => ({
         id: `m${m.id}`,
         role: m.role,
         text: m.content,
@@ -45,7 +50,7 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
 
   const stats = resumeId
     ? await (async () => {
-        const s = await getSessionStats(resumeId);
+        const s = await getSessionStats(resumeId, user.id);
         return {
           calls: s.calls,
           promptTokens: s.prompt_tokens,

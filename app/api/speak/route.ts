@@ -6,6 +6,7 @@ import {
   recordCall,
   sessionExists,
 } from "@/lib/db";
+import { getCurrentUser } from "@/lib/current-user";
 import {
   DEFAULT_TTS_MODEL,
   DEFAULT_VOICE,
@@ -20,6 +21,11 @@ import {
  * Returns WAV bytes; metadata rides along in headers.
  */
 export async function POST(request: Request) {
+  const user = await getCurrentUser();
+  if (!user) {
+    return Response.json({ error: "請先登入" }, { status: 401 });
+  }
+
   const apiKey =
     request.headers.get("x-gemini-key")?.trim() ||
     process.env.GEMINI_API_KEY?.trim();
@@ -58,10 +64,11 @@ export async function POST(request: Request) {
   // Audio has to be booked against a session, so start one if the learner
   // has not spoken yet (replaying the opening line before their first turn).
   let sessionId = body.sessionId;
-  if (!sessionId || !(await sessionExists(sessionId))) {
+  if (!sessionId || !(await sessionExists(sessionId, user.id))) {
     sessionId = await createSession(
       scenario.id,
       body.mode === "live" ? "live" : "script",
+      user.id,
     );
     await appendMessage(sessionId, "model", scenario.opening);
   }

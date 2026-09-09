@@ -10,8 +10,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 # Fluently — 專案規範
 
-英文口說練習應用：使用者選一個情境，與 AI 英文家教（Gemini）對話練習，
-對話與學習記憶存在本地 SQLite。
+英文口說練習應用：使用者以 Google 登入後選一個情境，與 AI 英文家教（Gemini）對話練習，
+對話與學習記憶存在 Cloudflare D1（`next dev` 走同一顆 local D1）。
 
 ## 動 UI 前必讀
 
@@ -28,14 +28,14 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 **[`docs/SCENARIOS.md`](docs/SCENARIOS.md) 記錄了全部 9 個對話情境**：
 `Scenario` 欄位定義、難度判準、每個情境的角色設定與開場白、欄位在各頁面的使用位置，
-以及新增情境的步驟。Seed 目錄在 `lib/scenarios.ts`，執行時讀 SQLite。
+以及新增情境的步驟。Seed 目錄在 `lib/scenarios.ts`，執行時讀 D1。
 
 新增或修改情境時，**同一個 commit 內更新 `docs/SCENARIOS.md`**；
 `id` 是路由與未來 DB 外鍵，公開後不要更動。
 
 ## 動資料層或 AI 串接前必讀
 
-**[`docs/DATA.md`](docs/DATA.md)** 記錄 SQLite schema（學習者、場景、情境、角色、用量帳、呼叫紀錄）、
+**[`docs/DATA.md`](docs/DATA.md)** 記錄 D1 schema（學習者、場景、情境、better-auth 帳號、用量帳、呼叫紀錄）、
 Gemini 串接方式、API key 流向、token 與來回次數的計算來源，以及語音的實作。
 
 重點規則：
@@ -45,13 +45,12 @@ Gemini 串接方式、API key 流向、token 與來回次數的計算來源，�
 - `api_calls.kind` 分 `chat` 與 `tts`：「來回次數」只數 `chat`，語音成本另計。
 - `api_calls` 記帳、`api_logs` 記原始呼叫（含送出/收到內容與狀態碼），**兩張表不要合併**。
 - 新增對外 API 呼叫時，透過 `onCall` 回呼記進 `api_logs`；
-  **`lib/gemini.ts` 不可 import `node:sqlite`**（它會被 client 端 import）。
-- 新增依賴新欄位的索引時，要放進 `migrate()`，不能放 `SCHEMA` 字串（舊資料庫會爆）。
+  **`lib/gemini.ts` 不可 import 資料庫**（它會被 client 端 import）。
+- 新增 schema 一律走 `migrations/*.sql` + `wrangler d1 migrations apply`，不要在執行時 `ALTER`。
 - API key 只走 localStorage → 請求標頭，**永遠不要寫進資料庫或 log**。
 - 角色舞台素材路徑（靜態圖與影片）只寫在 `lib/scene-clips.ts`，其他檔案一律透過 `resolveClip()` 取得。
 - 改 schema 或改串接方式時，同一個 commit 內更新 `docs/DATA.md`。
-
-資料庫需要 Node 22+（用內建 `node:sqlite`）。`ExperimentalWarning` 是預期輸出。
+- 登入走 better-auth（Google）；練習資料必須用 `user.id` 過濾。OAuth secret 只放 `.env.local`（`next dev`）、`.dev.vars`（preview）、或 `wrangler secret`（正式）。
 
 ## 驗收
 

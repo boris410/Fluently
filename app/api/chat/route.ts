@@ -7,6 +7,7 @@ import {
   recordCall,
   sessionExists,
 } from "@/lib/db";
+import { getCurrentUser } from "@/lib/current-user";
 import {
   DEFAULT_MODEL,
   GeminiError,
@@ -19,6 +20,11 @@ import {
  * the reply, persist that too, and record the token cost of the round trip.
  */
 export async function POST(request: Request) {
+  const user = await getCurrentUser();
+  if (!user) {
+    return Response.json({ error: "請先登入" }, { status: 401 });
+  }
+
   const apiKey =
     request.headers.get("x-gemini-key")?.trim() ||
     process.env.GEMINI_API_KEY?.trim();
@@ -59,17 +65,18 @@ export async function POST(request: Request) {
   // Resume the session when the client already has one, otherwise start a
   // new one seeded with the scenario's opening line so the model sees it.
   let sessionId = body.sessionId;
-  if (!sessionId || !(await sessionExists(sessionId))) {
+  if (!sessionId || !(await sessionExists(sessionId, user.id))) {
     sessionId = await createSession(
       scenario.id,
       body.mode === "live" ? "live" : "script",
+      user.id,
     );
     await appendMessage(sessionId, "model", scenario.opening);
   }
 
   await appendMessage(sessionId, "user", text);
 
-  const turns = (await getHistory(sessionId)).map((m) => ({
+  const turns = (await getHistory(sessionId, user.id)).map((m) => ({
     role: m.role,
     text: m.content,
   }));

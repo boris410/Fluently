@@ -1,9 +1,7 @@
 import Link from "next/link";
-import { HeroComposer } from "@/components/hero-composer";
 import { Mark } from "@/components/logo";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
-import { listScenarios } from "@/lib/db";
 
 const FEATURES = [
   {
@@ -19,7 +17,7 @@ const FEATURES = [
   {
     icon: "🗂️",
     title: "它記得你",
-    body: "對話與常錯的句型存在本地 SQLite，下次一開口，它就知道上次你練到哪、哪個字總是說不順。",
+    body: "對話與常錯的句型存在你的帳號，下次一開口，它就知道上次你練到哪、哪個字總是說不順。",
   },
 ];
 
@@ -29,10 +27,7 @@ const STEPS = [
   { n: "03", title: "收下回饋", body: "對話結束給你一份重點回顧：說得好的地方、可以再更自然的講法。" },
 ];
 
-export const dynamic = "force-dynamic";
-
-export default async function Home() {
-  const scenarios = await listScenarios();
+export default function Home() {
   return (
     <>
       <SiteHeader />
@@ -78,28 +73,6 @@ export default async function Home() {
               >
                 先看看怎麼運作
               </Link>
-            </div>
-
-            <div className="rise mt-14 w-full [animation-delay:320ms]">
-              <HeroComposer />
-              <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-                {scenarios.slice(0, 4).map((s) => (
-                  <Link
-                    key={s.id}
-                    href={`/chat/${s.id}`}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-[13px] text-ink-soft transition-colors hover:border-line-strong hover:text-ink"
-                  >
-                    <span>{s.emoji}</span>
-                    {s.titleZh}
-                  </Link>
-                ))}
-                <Link
-                  href="/scenarios"
-                  className="rounded-full px-3 py-2 text-[13px] text-clay transition-opacity hover:opacity-75"
-                >
-                  更多情境 →
-                </Link>
-              </div>
             </div>
           </div>
         </section>
