@@ -8,6 +8,7 @@ import {
   sessionExists,
 } from "@/lib/db";
 import { getCurrentUser } from "@/lib/current-user";
+import { resolveGeminiApiKey } from "@/lib/gemini-key";
 import {
   DEFAULT_MODEL,
   GeminiError,
@@ -25,9 +26,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "請先登入" }, { status: 401 });
   }
 
-  const apiKey =
-    request.headers.get("x-gemini-key")?.trim() ||
-    process.env.GEMINI_API_KEY?.trim();
+  const apiKey = await resolveGeminiApiKey(request);
 
   if (!apiKey) {
     return Response.json(

@@ -360,14 +360,14 @@ Route handler（server-only）再傳 `onCall: (call) => logApiCall({ ...call, se
 ## 4. API key 的流向
 
 ```
-設定面板輸入
-   → localStorage（只在這台瀏覽器）
-   → 每次請求帶 x-gemini-key 標頭到我們自己的 /api/chat
-   → 伺服器轉成 x-goog-api-key 送給 Google
+對話 / 語音
+   → 優先用伺服器 GEMINI_API_KEY（.env.local / .dev.vars / Worker secret）
+   → 沒有伺服器 key 才用設定面板寫進 localStorage、經 x-gemini-key 送來的那把
+   → 轉成 x-goog-api-key 送給 Google
 ```
 
 **key 不會寫進資料庫，也不會出現在任何 log。**
-伺服器端備援：若請求沒帶標頭，會改讀環境變數 `GEMINI_API_KEY`（見 `.env.example`）。
+設定面板的 key 仍可驗證（`POST /api/key-check` 優先讀標頭）；`GET /api/key-check` 只回 `{ configured }`，表示伺服器有沒有備援 key。見 [`lib/gemini-key.ts`](../lib/gemini-key.ts)。
 
 驗證用 [`/api/key-check`](../app/api/key-check/route.ts)，它呼叫 `GET /v1beta/models?pageSize=1`
 ——**不花任何 token** 就能確認 key 有效。

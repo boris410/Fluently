@@ -1,11 +1,15 @@
 import { logApiCall } from "@/lib/db";
+import { hasServerGeminiKey, resolveGeminiApiKey } from "@/lib/gemini-key";
 import { verifyKey } from "@/lib/gemini";
+
+/** Whether the server already has a Gemini key (env / Worker secret). */
+export async function GET() {
+  return Response.json({ configured: await hasServerGeminiKey() });
+}
 
 /** Validates an API key by listing models — costs no tokens. */
 export async function POST(request: Request) {
-  const apiKey =
-    request.headers.get("x-gemini-key")?.trim() ||
-    process.env.GEMINI_API_KEY?.trim();
+  const apiKey = await resolveGeminiApiKey(request, { prefer: "header" });
 
   if (!apiKey) {
     return Response.json({ ok: false, message: "沒有提供 key" }, { status: 400 });

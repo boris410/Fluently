@@ -198,7 +198,7 @@ export function SettingsMenu() {
                 </span>
               ) : (
                 <>
-                  只存在這個瀏覽器，不會寫進資料庫。
+                  伺服器已有 key 時這裡可以留空。貼上的 key 只存在這個瀏覽器，不會寫進資料庫。
                   <a
                     href="https://aistudio.google.com/apikey"
                     target="_blank"

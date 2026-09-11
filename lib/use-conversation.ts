@@ -82,7 +82,23 @@ export function useConversation({
     () => (getApiKey() ? "set" : "missing"),
     () => "set",
   );
-  const hasKey = storedKey === "set" && !rejectedKey;
+  const [serverConfigured, setServerConfigured] = useState(true);
+  useEffect(() => {
+    let stale = false;
+    fetch("/api/key-check")
+      .then((res) => res.json())
+      .then((data: { configured?: boolean }) => {
+        if (!stale) setServerConfigured(Boolean(data.configured));
+      })
+      .catch(() => {
+        if (!stale) setServerConfigured(false);
+      });
+    return () => {
+      stale = true;
+    };
+  }, []);
+  const hasKey =
+    (storedKey === "set" || serverConfigured) && !rejectedKey;
 
   const greeted = useRef(false);
   const sessionIdRef = useRef(initialSessionId);
