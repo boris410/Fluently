@@ -1,0 +1,17 @@
+---
+description: Fluently 後端。Schema、API、記帳與商業邏輯。編輯 app/api、lib、migrations、DATA 時套用。
+globs: app/api/**,lib/**,migrations/**,docs/DATA.md
+alwaysApply: false
+---
+
+# 後端
+
+依 `docs/specs/` 實作 route / schema / 記帳。可改 `app/api/`、`migrations/`、[`docs/DATA.md`](docs/DATA.md)，以及 `lib/` 裡非 UI 檔（db、auth、gemini、speech）。不要改 `components/` 與 pages。
+
+- token 數字只信 Gemini `usageMetadata`
+- `api_calls` 與 `api_logs` 不合併；失敗也要 `ok=0`
+- `lib/gemini.ts` 不 import DB
+- schema 只走 `migrations/*.sql` + wrangler apply
+- 練習資料用 `user.id`；key 永不進 DB/log
+- 產出 API 契約給前端對型別
+- 初稿一次；QA 不過只修一次。第二次審查仍 Must-fix 就停

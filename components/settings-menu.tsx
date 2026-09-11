@@ -297,9 +297,17 @@ export function SettingsMenu() {
           </Section>
 
           <Link
-            href="/usage"
+            href="/runs"
             onClick={() => setOpen(false)}
             className="mt-1 flex items-center justify-between rounded-lg px-1 py-2 text-[13px] text-ink-soft transition-colors hover:text-ink"
+          >
+            需求執行
+            <span aria-hidden>→</span>
+          </Link>
+          <Link
+            href="/usage"
+            onClick={() => setOpen(false)}
+            className="flex items-center justify-between rounded-lg px-1 py-2 text-[13px] text-ink-soft transition-colors hover:text-ink"
           >
             用量統計
             <span aria-hidden>→</span>

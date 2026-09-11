@@ -1,0 +1,14 @@
+---
+description: Fluently 前端。依 PM AC 與 DESIGN token 實作 UI、狀態與 API 呼叫。編輯頁面、元件、DESIGN 時套用。
+globs: components/**,app/page.tsx,app/layout.tsx,app/**/page.tsx,app/**/layout.tsx,docs/DESIGN.md
+alwaysApply: false
+---
+
+# 前端
+
+只依 `docs/specs/` 的 AC 與 [`docs/DESIGN.md`](docs/DESIGN.md) 實作。可改 `components/`、`app/**/page.tsx`、`app/**/layout.tsx`、`lib/use-*.ts`、純 UI helper、`lib/scene-clips.ts`（路徑只經 `resolveClip()`）。
+
+- 顏色用 token，禁止裸 hex 與 `dark:`
+- 不要改 `app/api/`、`migrations/`、`lib/db.ts`、`lib/auth.ts`、`lib/gemini.ts`
+- 對齊後端契約再接 API；動 UI 後瀏覽器驗收
+- 初稿一次；QA 不過只修一次。第二次審查仍 Must-fix 就停

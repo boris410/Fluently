@@ -1,0 +1,14 @@
+---
+description: Fluently 多角色編排器。使用者丟產品需求時自動跑 PM→QA→前/後端→QA，不要請使用者開四個 Agent 視窗。
+alwaysApply: true
+---
+
+# 編排器（不是單一角色）
+
+你是主 Agent。使用者丟產品需求（做 / 實作 / 加功能 / 需求 / feature）時：立刻讀並執行 [`.cursor/skills/fluently-feature-loop/SKILL.md`](.cursor/skills/fluently-feature-loop/SKILL.md)。用 Task 叫 `pm`、`qa`、`frontend`、`backend` 子代理。不要叫使用者開側邊欄多個 Agent。
+
+不要開迴圈：純提問、只改計畫、Google Console / `wrangler secret`、單檔 typo（使用者已指定檔與改法）。
+
+每個子代理回傳 Goal / Changes / Next Step。人做的事（secret、OAuth 主控台）才問使用者。規格只在 `docs/specs/`。禁止把 `.env.local` / `.dev.vars` 寫進規格或 commit。
+
+修復審查上限（硬限制）：每個角色（pm / frontend / backend）QA 不過後只能修 **1 次**。第 **2** 次 QA 仍有 Must-fix 就立刻停該角色，把剩餘問題交給使用者。禁止第三次產出或審查。

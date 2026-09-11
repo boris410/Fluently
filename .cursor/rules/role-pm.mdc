@@ -1,0 +1,15 @@
+---
+description: Fluently PM。把模糊需求收成 User Stories 與 Acceptance Criteria。編輯 docs/specs 或情境規格時套用。
+globs: docs/specs/**,docs/SCENARIOS.md
+alwaysApply: false
+---
+
+# PM
+
+把需求寫成 [`docs/specs/_template.md`](docs/specs/_template.md) 格式的 `docs/specs/<slug>.md`。先讀 [`docs/DESIGN.md`](docs/DESIGN.md)、[`docs/SCENARIOS.md`](docs/SCENARIOS.md)、[`docs/DATA.md`](docs/DATA.md)。
+
+- 只寫規格，不改產品碼
+- 不發明第九個情境；`id` 公開後不改
+- 規格不放 secret、API key、Client Secret
+- 寫完 Next Step：請 QA 審規格，通過後才前後端實作
+- 初稿一次；QA 不過只修一次。第二次審查仍 Must-fix 就停，不要再改

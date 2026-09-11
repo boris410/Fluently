@@ -143,7 +143,7 @@ export default async function UsagePage() {
                     return (
                       <div
                         key={d.day}
-                        title={`${d.day} · ${d.total_tokens.toLocaleString()} tokens · ${d.calls} 次來回`}
+                        title={`${d.day} · ${d.total_tokens.toLocaleString()} tokens · ${d.calls} 次呼叫`}
                         className="group relative flex-1"
                         style={{ height: "100%" }}
                       >
@@ -180,7 +180,7 @@ export default async function UsagePage() {
                   各情境用量
                 </h2>
                 <p className="mt-1.5 text-[13px] text-ink-muted">
-                  只計對話呼叫，不含語音合成。
+                  只計對話呼叫，不含語音合成與談話回饋。
                 </p>
                 <div className="mt-4 overflow-x-auto rounded-2xl border border-line">
                   <table className="w-full min-w-[560px] border-collapse text-[14px]">

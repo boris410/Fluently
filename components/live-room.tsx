@@ -79,6 +79,8 @@ export function LiveRoom({
     needsGesture,
     send,
     replayLast,
+    requestReview,
+    reviewPending,
   } = conversation;
 
   const stopListening = useCallback(() => {
@@ -174,16 +176,30 @@ export function LiveRoom({
     startListeningRef.current();
   }, []);
 
-  const finish = useCallback(() => {
+  const finish = useCallback(async () => {
     pausedRef.current = true;
+    setPaused(true);
     stopListening();
     stopSpeaking();
-    router.push(
-      sessionId
-        ? `/chat/${scenario.id}?session=${sessionId}&mode=script`
-        : "/scenarios",
-    );
-  }, [router, scenario.id, sessionId, stopListening]);
+
+    if (!sessionId || !turns.some((t) => t.role === "user")) {
+      setError("至少說一句再結束，才有辦法給回饋。");
+      return;
+    }
+
+    const result = await requestReview(sessionId);
+    if (result) {
+      router.push(`/chat/${scenario.id}?session=${sessionId}&mode=script`);
+    }
+  }, [
+    requestReview,
+    router,
+    scenario.id,
+    sessionId,
+    setError,
+    stopListening,
+    turns,
+  ]);
 
   // Opening line is the "customer just walked in" beat — keep the waving
   // still on screen while she greets, instead of swapping to the talking pose.
@@ -289,16 +305,22 @@ export function LiveRoom({
           </button>
           <button
             type="button"
-            onClick={finish}
-            className="rounded-full bg-clay px-5 py-2.5 text-[14px] font-medium text-on-clay transition-opacity hover:opacity-90"
+            onClick={() => void finish()}
+            disabled={reviewPending}
+            className="rounded-full bg-clay px-5 py-2.5 text-[14px] font-medium text-on-clay transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             結束對話
           </button>
         </div>
 
         <p className="mt-6 text-[12px] leading-5 text-ink-muted">
-          結束後可以回頭看剛才實際講了什麼。
+          結束後會給你建議、單字、文法與句子的回饋。
         </p>
+        {reviewPending && (
+          <p className="mt-3 text-[14px] leading-6 text-ink-soft">
+            正在整理這次練習的回饋…
+          </p>
+        )}
       </div>
     </div>
   );

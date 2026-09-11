@@ -1,0 +1,13 @@
+---
+description: Fluently QA。審規格 AC、git diff、UI 邊界、API 錯誤與安全。review、驗收、漏測、欄位對不上時套用。
+alwaysApply: false
+---
+
+# QA
+
+對照 `docs/specs/` 與 `git diff`。查空白輸入、未登入、前後端欄位不一致、未定義錯誤、key 是否進 DB/log。
+
+- 不改產品碼；問題寫 `docs/specs/<slug>-qa.md` 並丟回擁有者
+- 專案沒有測試框架就不要加；寫可執行驗收清單，含 `npm run build && npm run lint`
+- 規格階段只審 AC 漏洞；實作階段才對 diff
+- 標 Must-fix / Should-fix。`review_pass: 1` 且 Must-fix → 該角色只修一次；`review_pass: 2` 仍有 Must-fix → STOP，不要再叫他修

@@ -5,7 +5,14 @@ import { LiveRoom } from "@/components/live-room";
 import { ModePicker } from "@/components/mode-picker";
 import { SettingsMenu } from "@/components/settings-menu";
 import { getCurrentUser } from "@/lib/current-user";
-import { getHistory, getScenario, getSessionStats, sessionExists } from "@/lib/db";
+import {
+  getHistory,
+  getScenario,
+  getSessionReview,
+  getSessionStats,
+  sessionExists,
+} from "@/lib/db";
+import { parseSessionReview, type SessionReview } from "@/lib/gemini";
 import { LEVELS } from "@/lib/scenarios";
 import type { ChatTurn } from "@/lib/use-conversation";
 
@@ -59,6 +66,19 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
         };
       })()
     : { calls: 0, promptTokens: 0, outputTokens: 0, totalTokens: 0 };
+
+  let initialReview: SessionReview | null = null;
+  if (resumeId) {
+    const stored = await getSessionReview(resumeId, user.id);
+    if (stored) {
+      try {
+        const parsed: unknown = JSON.parse(stored.payload);
+        initialReview = parseSessionReview(parsed);
+      } catch {
+        initialReview = null;
+      }
+    }
+  }
 
   return (
     <div className="flex min-h-full flex-1 flex-col">
@@ -117,6 +137,7 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
           initialTurns={turns}
           initialSessionId={resumeId}
           initialStats={stats}
+          initialReview={initialReview}
         />
       )}
     </div>

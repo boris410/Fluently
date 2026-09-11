@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Mark } from "@/components/logo";
+import type { SessionReview } from "@/lib/gemini";
 import type { Scenario } from "@/lib/scenarios";
 import { type SpeakState, canListen, canSpeak, listen } from "@/lib/speech";
 import {
@@ -22,16 +23,21 @@ export function ChatRoom({
   initialTurns,
   initialSessionId,
   initialStats,
+  initialReview = null,
 }: {
   scenario: Scenario;
   initialTurns: ChatTurn[];
   initialSessionId: string | null;
   initialStats: Stats;
+  initialReview?: SessionReview | null;
 }) {
   const {
     turns,
+    sessionId,
     stats,
     pending,
+    review,
+    reviewPending,
     error,
     setError,
     hasKey,
@@ -43,11 +49,13 @@ export function ChatRoom({
     play,
     stopPlayback,
     replayLast,
+    requestReview,
   } = useConversation({
     scenario,
     initialTurns,
     initialSessionId,
     initialStats,
+    initialReview,
     mode: "script",
   });
 
@@ -59,7 +67,7 @@ export function ChatRoom({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [turns, pending]);
+  }, [turns, pending, review, reviewPending]);
 
   const submit = useCallback(
     async (text: string) => {
@@ -104,6 +112,14 @@ export function ChatRoom({
     setListening(true);
   }, [listening, setError, stopPlayback, submit]);
 
+  const endConversation = useCallback(async () => {
+    if (!sessionId || !turns.some((t) => t.role === "user")) {
+      setError("至少說一句再結束，才有辦法給回饋。");
+      return;
+    }
+    await requestReview(sessionId);
+  }, [requestReview, sessionId, setError, turns]);
+
   return (
     <div className="flex flex-1 flex-col">
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-5 py-8 sm:px-8">
@@ -126,6 +142,12 @@ export function ChatRoom({
             ),
           )}
           {pending && <Thinking />}
+          {reviewPending && (
+            <p className="text-[14px] leading-7 text-ink-soft">
+              正在整理這次練習的回饋…
+            </p>
+          )}
+          {review && <PracticeReview review={review} />}
           <div ref={bottomRef} />
         </div>
 
@@ -169,6 +191,17 @@ export function ChatRoom({
             {error}
           </div>
         )}
+
+        <div className="mt-6 flex justify-end">
+          <button
+            type="button"
+            onClick={() => void endConversation()}
+            disabled={reviewPending}
+            className="rounded-full border border-line-strong px-4 py-2 font-medium text-ink transition-colors hover:border-clay hover:text-clay disabled:opacity-40"
+          >
+            結束對話
+          </button>
+        </div>
 
         <div className="sticky bottom-4 mt-6">
           <div className="rounded-[20px] border border-line bg-surface p-3 shadow-[var(--shadow)] sm:p-4">
@@ -242,6 +275,89 @@ export function ChatRoom({
         </div>
       </div>
     </div>
+  );
+}
+
+function PracticeReview({ review }: { review: SessionReview }) {
+  return (
+    <div className="rise rounded-2xl border border-line bg-surface p-5">
+      <h2 className="font-display text-[28px] sm:text-[32px]">這次練習的回饋</h2>
+      <p className="mt-2 text-[14px] leading-7 text-ink-soft">
+        根據你剛才說的內容整理。家教在對話裡不會出戲糾正；這份是另外產出的回顧。
+      </p>
+
+      <ReviewSection title="建議" empty={review.advice.length === 0}>
+        {review.advice.map((item, i) => (
+          <div key={`advice-${i}`}>
+            <p className="text-[16px] leading-7">{item.headline}</p>
+            <p className="text-[14px] leading-7 text-ink-soft">{item.detail}</p>
+          </div>
+        ))}
+      </ReviewSection>
+
+      <ReviewSection title="單字" empty={review.vocabulary.length === 0}>
+        {review.vocabulary.map((item, i) => (
+          <div key={`vocab-${i}`}>
+            <p className="text-[16px] leading-7">{item.word}</p>
+            <p className="text-[14px] leading-7 text-ink-soft">{item.meaningZh}</p>
+            <p className="text-[16px] leading-7">{item.exampleEn}</p>
+            <p className="text-[14px] leading-7 text-ink-soft">{item.noteZh}</p>
+          </div>
+        ))}
+      </ReviewSection>
+
+      <ReviewSection title="文法" empty={review.grammar.length === 0}>
+        {review.grammar.map((item, i) => (
+          <div key={`grammar-${i}`}>
+            <p className="text-[14px] leading-7 text-ink-soft">{item.pointZh}</p>
+            <p className="text-[14px] leading-7 text-ink-soft">{item.issueZh}</p>
+            <p className="text-[16px] leading-7">{item.betterEn}</p>
+          </div>
+        ))}
+      </ReviewSection>
+
+      <ReviewSection title="句子" empty={review.sentences.length === 0}>
+        {review.sentences.map((item, i) => (
+          <div key={`sentence-${i}`}>
+            <p className="text-[16px] leading-7">{item.originalEn}</p>
+            <p className="text-[16px] leading-7">{item.betterEn}</p>
+            <p className="text-[14px] leading-7 text-ink-soft">{item.whyZh}</p>
+          </div>
+        ))}
+      </ReviewSection>
+
+      <Link
+        href="/scenarios"
+        className="mt-8 inline-flex h-13 items-center gap-2 rounded-full bg-clay px-7 text-[16px] font-medium text-on-clay shadow-[var(--shadow)] transition-colors hover:bg-clay-deep"
+      >
+        再練一次
+      </Link>
+    </div>
+  );
+}
+
+function ReviewSection({
+  title,
+  empty,
+  children,
+}: {
+  title: string;
+  empty: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="mt-8">
+      <h3 className="font-display text-[18px] leading-snug sm:text-[19px]">
+        {title}
+      </h3>
+      {empty ? (
+        <p className="mt-2 text-[14px] leading-7 text-ink-soft">
+          這次沒什麼需要特別標的。
+        </p>
+      ) : (
+        <div className="mt-3 space-y-4">{children}</div>
+      )}
+    </section>
   );
 }
 

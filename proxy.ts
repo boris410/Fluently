@@ -32,5 +32,7 @@ export const config = {
     "/logs/:path*",
     "/tts",
     "/tts/:path*",
+    "/runs",
+    "/runs/:path*",
   ],
 };

@@ -13,6 +13,7 @@ import {
   getAutoSpeak,
   subscribeSettings,
 } from "@/lib/settings";
+import { parseSessionReview, type SessionReview } from "@/lib/gemini";
 import type { Scenario } from "@/lib/scenarios";
 import { type SpeakState, speakReply, stopSpeaking } from "@/lib/speech";
 
@@ -43,6 +44,7 @@ export function useConversation({
   initialTurns,
   initialSessionId,
   initialStats,
+  initialReview = null,
   mode,
   forceSpeak = false,
   onSpeechFinished,
@@ -51,6 +53,7 @@ export function useConversation({
   initialTurns: ChatTurn[];
   initialSessionId: string | null;
   initialStats: Stats;
+  initialReview?: SessionReview | null;
   mode?: "script" | "live";
   /**
    * Speak regardless of the "auto read replies" preference. Hands-free mode
@@ -66,6 +69,8 @@ export function useConversation({
   const [turns, setTurns] = useState<ChatTurn[]>(initialTurns);
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId);
   const [stats, setStats] = useState<Stats>(initialStats);
+  const [review, setReview] = useState<SessionReview | null>(initialReview);
+  const [reviewPending, setReviewPending] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rejectedKey, setRejectedKey] = useState(false);
@@ -257,6 +262,39 @@ export function useConversation({
     [forceSpeak, mode, pending, play, rememberSession, scenario.id],
   );
 
+  const requestReview = useCallback(async (id: string) => {
+    setError(null);
+    setReviewPending(true);
+    try {
+      const res = await fetch("/api/review", {
+        method: "POST",
+        headers: apiHeaders(),
+        body: JSON.stringify({ sessionId: id }),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error ?? `發生錯誤（${res.status}）`);
+        if (res.status === 401) setRejectedKey(true);
+        return null;
+      }
+
+      setRejectedKey(false);
+      const next = parseSessionReview(data.review);
+      if (!next) {
+        setError("回饋沒有產生，請再試一次。");
+        return null;
+      }
+      setReview(next);
+      return next;
+    } catch {
+      setError("連線失敗，請確認 dev server 還在跑。");
+      return null;
+    } finally {
+      setReviewPending(false);
+    }
+  }, []);
+
   /** Replays the most recent tutor line — used by the unlock prompt. */
   const replayLast = useCallback(() => {
     const last = [...turns].reverse().find((t) => t.role === "model");
@@ -268,6 +306,8 @@ export function useConversation({
     sessionId,
     stats,
     pending,
+    review,
+    reviewPending,
     error,
     setError,
     hasKey,
@@ -279,5 +319,6 @@ export function useConversation({
     play,
     stopPlayback,
     replayLast,
+    requestReview,
   };
 }

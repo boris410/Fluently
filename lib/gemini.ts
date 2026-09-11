@@ -21,7 +21,7 @@ export const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 export type ApiCallRecord = {
   platform: "gemini";
   endpoint: string;
-  operation: "chat" | "tts" | "verify-key";
+  operation: "chat" | "tts" | "verify-key" | "review";
   model: string | null;
   detail: string | null;
   input: string | null;
@@ -57,6 +57,220 @@ export type GeminiUsage = {
   thoughtTokens: number;
   totalTokens: number;
 };
+
+/** Canonical post-chat debrief. Same shape in Gemini schema, HTTP `review`, and D1 payload. */
+export type AdviceItem = {
+  headline: string;
+  detail: string;
+};
+
+export type VocabItem = {
+  word: string;
+  meaningZh: string;
+  exampleEn: string;
+  noteZh: string;
+};
+
+export type GrammarItem = {
+  pointZh: string;
+  issueZh: string;
+  betterEn: string;
+};
+
+export type SentenceItem = {
+  originalEn: string;
+  betterEn: string;
+  whyZh: string;
+};
+
+export type SessionReview = {
+  advice: AdviceItem[];
+  vocabulary: VocabItem[];
+  grammar: GrammarItem[];
+  sentences: SentenceItem[];
+};
+
+const ADVICE_KEYS = ["headline", "detail"] as const;
+const VOCAB_KEYS = ["word", "meaningZh", "exampleEn", "noteZh"] as const;
+const GRAMMAR_KEYS = ["pointZh", "issueZh", "betterEn"] as const;
+const SENTENCE_KEYS = ["originalEn", "betterEn", "whyZh"] as const;
+
+function asItemStrings<K extends string>(
+  item: unknown,
+  keys: readonly K[],
+): Record<K, string> | null {
+  if (!item || typeof item !== "object") return null;
+  const rec = item as Record<string, unknown>;
+  const out = {} as Record<K, string>;
+  for (const key of keys) {
+    const value = rec[key];
+    if (typeof value !== "string") return null;
+    out[key] = value;
+  }
+  return out;
+}
+
+function asItemArray<T>(
+  value: unknown,
+  parseItem: (item: unknown) => T | null,
+): T[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: T[] = [];
+  for (const item of value) {
+    const parsed = parseItem(item);
+    if (!parsed) return null;
+    out.push(parsed);
+  }
+  return out;
+}
+
+/**
+ * Validates Canonical JSON. Extra top-level keys are ignored. Missing keys,
+ * non-arrays, or items missing a required field → null (malformed).
+ * All four arrays empty is valid.
+ */
+export function parseSessionReview(input: unknown): SessionReview | null {
+  let value = input;
+  if (typeof input === "string") {
+    try {
+      value = JSON.parse(input) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object") return null;
+  const rec = value as Record<string, unknown>;
+  const advice = asItemArray(rec.advice, (item) =>
+    asItemStrings(item, ADVICE_KEYS),
+  );
+  const vocabulary = asItemArray(rec.vocabulary, (item) =>
+    asItemStrings(item, VOCAB_KEYS),
+  );
+  const grammar = asItemArray(rec.grammar, (item) =>
+    asItemStrings(item, GRAMMAR_KEYS),
+  );
+  const sentences = asItemArray(rec.sentences, (item) =>
+    asItemStrings(item, SENTENCE_KEYS),
+  );
+  if (!advice || !vocabulary || !grammar || !sentences) return null;
+  return { advice, vocabulary, grammar, sentences };
+}
+
+const REVIEW_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    advice: {
+      type: "ARRAY",
+      description: "建議 — 2–4 items when the transcript supports it",
+      items: {
+        type: "OBJECT",
+        properties: {
+          headline: {
+            type: "STRING",
+            description: "繁體中文，短標題",
+          },
+          detail: {
+            type: "STRING",
+            description: "繁體中文說明（為何、下次怎麼做）",
+          },
+        },
+        required: ["headline", "detail"],
+      },
+    },
+    vocabulary: {
+      type: "ARRAY",
+      description: "單字 — 3–6 typical",
+      items: {
+        type: "OBJECT",
+        properties: {
+          word: {
+            type: "STRING",
+            description: "English word or short phrase",
+          },
+          meaningZh: {
+            type: "STRING",
+            description: "繁體中文意思",
+          },
+          exampleEn: {
+            type: "STRING",
+            description: "English example sentence",
+          },
+          noteZh: {
+            type: "STRING",
+            description: "繁體中文：為何點這個字／怎麼用更自然",
+          },
+        },
+        required: ["word", "meaningZh", "exampleEn", "noteZh"],
+      },
+    },
+    grammar: {
+      type: "ARRAY",
+      description: "文法 — 2–4 typical",
+      items: {
+        type: "OBJECT",
+        properties: {
+          pointZh: {
+            type: "STRING",
+            description: "繁體中文文法點名稱",
+          },
+          issueZh: {
+            type: "STRING",
+            description: "繁體中文：這次談話裡發生了什麼",
+          },
+          betterEn: {
+            type: "STRING",
+            description: "Corrected / more natural English",
+          },
+        },
+        required: ["pointZh", "issueZh", "betterEn"],
+      },
+    },
+    sentences: {
+      type: "ARRAY",
+      description: "句子 — 2–4 typical",
+      items: {
+        type: "OBJECT",
+        properties: {
+          originalEn: {
+            type: "STRING",
+            description:
+              "Learner sentence (or close paraphrase of what they said)",
+          },
+          betterEn: {
+            type: "STRING",
+            description: "More natural English",
+          },
+          whyZh: {
+            type: "STRING",
+            description: "繁體中文：為什麼這樣改",
+          },
+        },
+        required: ["originalEn", "betterEn", "whyZh"],
+      },
+    },
+  },
+  required: ["advice", "vocabulary", "grammar", "sentences"],
+} as const;
+
+function usageFromMeta(meta: {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  thoughtsTokenCount?: number;
+  totalTokenCount?: number;
+}): GeminiUsage {
+  return {
+    promptTokens: meta.promptTokenCount ?? 0,
+    outputTokens: meta.candidatesTokenCount ?? 0,
+    thoughtTokens: meta.thoughtsTokenCount ?? 0,
+    totalTokens: meta.totalTokenCount ?? 0,
+  };
+}
+
+function formatReviewTranscript(turns: GeminiTurn[]): string {
+  return turns
+    .map((t) => `${t.role === "user" ? "Learner" : "Tutor"}: ${t.text}`)
+    .join("\n");
+}
 
 export type ReplyEmotion =
   | "neutral"
@@ -109,6 +323,22 @@ export function buildSystemInstruction(scenario: Scenario): string {
   ].join("\n");
 }
 
+/** Out-of-character coach prompt. Must not be used for in-scene chat. */
+export function buildReviewInstruction(scenario: Scenario): string {
+  return [
+    "You are an English speaking coach writing a debrief of one practice conversation.",
+    "You are not in the scene and must not role-play the conversation partner.",
+    `Scene: ${scenario.title} (${scenario.titleZh}). Level: ${scenario.level}. Language focus: ${scenario.focus.join(", ")}.`,
+    "Review only this transcript. Be specific to what the learner said.",
+    "Return JSON with four arrays: advice, vocabulary, grammar, sentences.",
+    "Aim for advice 2–4 items, vocabulary 3–6, grammar 2–4, sentences 2–4 when the transcript supports it. Empty arrays are allowed if a section has nothing useful to mark.",
+    "Language:",
+    "- headline, detail, meaningZh, noteZh, pointZh, issueZh, whyZh: Traditional Chinese (繁體中文).",
+    "- word, exampleEn, betterEn, originalEn: English.",
+    "Do not invent a numeric score. Do not stay in character.",
+  ].join("\n");
+}
+
 type GeminiResponse = {
   candidates?: {
     content?: { parts?: { text?: string }[] };
@@ -125,11 +355,19 @@ type GeminiResponse = {
 
 export class GeminiError extends Error {
   status: number;
+  usage: GeminiUsage | null;
+  latencyMs: number;
 
-  constructor(message: string, status: number) {
+  constructor(
+    message: string,
+    status: number,
+    extra?: { usage?: GeminiUsage | null; latencyMs?: number },
+  ) {
     super(message);
     this.name = "GeminiError";
     this.status = status;
+    this.usage = extra?.usage ?? null;
+    this.latencyMs = extra?.latencyMs ?? 0;
   }
 }
 
@@ -262,6 +500,136 @@ export async function generateReply(options: {
       totalTokens: meta.totalTokenCount ?? 0,
     },
   };
+}
+
+export type ReviewResult = {
+  review: SessionReview;
+  usage: GeminiUsage;
+  latencyMs: number;
+};
+
+export async function generateReview(options: {
+  apiKey: string;
+  model: string;
+  scenario: Scenario;
+  turns: GeminiTurn[];
+  onCall?: ApiCallLogger;
+}): Promise<ReviewResult> {
+  const { apiKey, model, scenario, turns, onCall } = options;
+  const endpoint = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent`;
+  const systemInstruction = buildReviewInstruction(scenario);
+  const transcript = formatReviewTranscript(turns);
+  const requestedAt = Date.now();
+
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: transcript }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.4,
+          maxOutputTokens: 2048,
+          responseMimeType: "application/json",
+          responseSchema: REVIEW_RESPONSE_SCHEMA,
+        },
+      }),
+    });
+  } catch (error) {
+    const returnedAt = Date.now();
+    const latencyMs = returnedAt - requestedAt;
+    const usage = usageFromMeta({});
+    onCall?.({
+      platform: "gemini",
+      endpoint,
+      operation: "review",
+      model,
+      detail: null,
+      input: transcript,
+      output: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      status: 0,
+      ok: false,
+      error: error instanceof Error ? error.message : "網路錯誤",
+      requestedAt,
+      returnedAt,
+      durationMs: latencyMs,
+    });
+    throw new GeminiError(
+      error instanceof Error ? error.message : "網路錯誤",
+      502,
+      { usage, latencyMs },
+    );
+  }
+
+  const returnedAt = Date.now();
+  const latencyMs = returnedAt - requestedAt;
+  const body = (await res.json().catch(() => null)) as GeminiResponse | null;
+  const meta = body?.usageMetadata ?? {};
+  const usage = usageFromMeta(meta);
+
+  const log = (outcome: {
+    ok: boolean;
+    output: string | null;
+    error: string | null;
+  }) =>
+    onCall?.({
+      platform: "gemini",
+      endpoint,
+      operation: "review",
+      model,
+      detail: null,
+      input: transcript,
+      inputTokens: usage.promptTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      status: res.status,
+      requestedAt,
+      returnedAt,
+      durationMs: latencyMs,
+      ...outcome,
+    });
+
+  if (!res.ok) {
+    const message = body?.error?.message ?? `Gemini 回應 ${res.status}`;
+    log({ ok: false, output: null, error: message });
+    throw new GeminiError(message, res.status, { usage, latencyMs });
+  }
+
+  const raw =
+    body?.candidates?.[0]?.content?.parts
+      ?.map((p) => p.text ?? "")
+      .join("")
+      .trim() ?? "";
+
+  if (!raw) {
+    const message = `模型沒有產生內容（finishReason: ${body?.candidates?.[0]?.finishReason ?? "unknown"}）`;
+    log({ ok: false, output: null, error: message });
+    throw new GeminiError(message, 502, { usage, latencyMs });
+  }
+
+  const review = parseSessionReview(raw);
+  if (!review) {
+    const message = "模型回傳的 JSON 無法解析為回饋";
+    log({ ok: false, output: raw, error: message });
+    throw new GeminiError(message, 502, { usage, latencyMs });
+  }
+
+  log({ ok: true, output: raw, error: null });
+
+  return { review, usage, latencyMs };
 }
 
 /** Validates a key without spending tokens — just lists available models. */

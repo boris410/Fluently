@@ -1,7 +1,7 @@
 # Fluently — 資料層與 AI 串接
 
 > 記錄 DB schema、Gemini 串接方式、API key 的流向，以及 token/來回次數是怎麼算出來的。
-> 程式碼在 [`lib/db.ts`](../lib/db.ts)、[`lib/gemini.ts`](../lib/gemini.ts)、[`app/api/chat/route.ts`](../app/api/chat/route.ts)、[`lib/auth.ts`](../lib/auth.ts)。
+> 程式碼在 [`lib/db.ts`](../lib/db.ts)、[`lib/gemini.ts`](../lib/gemini.ts)、[`app/api/chat/route.ts`](../app/api/chat/route.ts)、[`app/api/review/route.ts`](../app/api/review/route.ts)、[`lib/auth.ts`](../lib/auth.ts)。
 > 改 schema 或改串接方式時，**同一個 commit 內更新這份文件**。
 
 ---
@@ -24,7 +24,7 @@ wrangler d1 migrations apply fluently_db --remote  # 正式
 
 D1 就是 SQLite，因此 `lib/db.ts` 每個匯出函式都回傳 `Promise`，呼叫端一律 `await`。
 
-多使用者：登入走 **better-auth + Google**。帳號存在 `user` / `session` / `account` / `verification`（`migrations/0003_auth.sql`）。首次登入時 databaseHook 會用同一個 `user.id` 在 `user_students` 建一列學習者檔案。練習資料（`sessions` / `messages` / `api_calls` / `api_logs`）都以 `user_student_id = user.id` 隔離；沒登入不能進 `/scenarios`、`/chat`、`/usage`、`/logs`、`/tts`。
+多使用者：登入走 **better-auth + Google**。帳號存在 `user` / `session` / `account` / `verification`（`migrations/0003_auth.sql`）。首次登入時 databaseHook 會用同一個 `user.id` 在 `user_students` 建一列學習者檔案。練習資料（`sessions` / `messages` / `session_reviews` / `api_calls` / `api_logs`）都以 `user_student_id = user.id` 隔離；角色迴圈看板（`agent_runs` / `agent_turns`）以 `user_id = user.id` 隔離。沒登入不能進 `/scenarios`、`/chat`、`/usage`、`/logs`、`/tts`、`/runs`。
 
 Auth 變數：本機 `next dev` 讀 `.env.local`；`npm run preview` 讀 `.dev.vars`（兩份都要有同一組）。正式環境用 `wrangler secret put` 設 `BETTER_AUTH_SECRET`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`。
 
@@ -106,11 +106,21 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at       INTEGER NOT NULL  -- epoch ms
 );
 
+-- 談話後回饋；每段練習最多一列。payload 是 Canonical SessionReview JSON
+CREATE TABLE IF NOT EXISTS session_reviews (
+  id               TEXT PRIMARY KEY, -- crypto.randomUUID()
+  session_id       TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE, -- 一段練習一筆
+  user_student_id  TEXT NOT NULL,    -- = user.id；應用層過濾，不加 FK 到 "user"
+  payload          TEXT NOT NULL,    -- Canonical JSON：advice / vocabulary / grammar / sentences
+  model            TEXT NOT NULL,    -- 寫入這列時用的模型 id
+  created_at       INTEGER NOT NULL  -- epoch ms
+);
+
 -- 用量帳：一列 = 一次計費呼叫。情境/音色從 session 關聯推，不寫在這張表
 CREATE TABLE IF NOT EXISTS api_calls (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, -- 記在哪段練習
-  kind           TEXT NOT NULL DEFAULT 'chat', -- chat 對話 / tts 語音；來回次數只數 chat
+  kind           TEXT NOT NULL DEFAULT 'chat', -- chat 對話 / tts 語音 / review 談話回饋；來回次數只數 chat
   model          TEXT NOT NULL,    -- 實際呼叫的模型 id
   prompt_tokens  INTEGER NOT NULL DEFAULT 0, -- Gemini promptTokenCount；TTS 常為 0
   output_tokens  INTEGER NOT NULL DEFAULT 0, -- candidatesTokenCount
@@ -127,7 +137,7 @@ CREATE TABLE IF NOT EXISTS api_logs (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   platform         TEXT NOT NULL,    -- gemini / elevenlabs
   endpoint         TEXT NOT NULL,    -- 完整 URL，不含 API key
-  operation        TEXT NOT NULL,    -- chat / tts / verify-key
+  operation        TEXT NOT NULL,    -- chat / tts / verify-key / review
   model            TEXT,             -- 模型；verify-key 為 NULL
   detail           TEXT,             -- 額外參數，例如 voice=Kore
   session_id       TEXT,             -- 關聯練習，刻意不加外鍵
@@ -153,6 +163,45 @@ CREATE INDEX IF NOT EXISTS idx_logs_requested ON api_logs(requested_at);
 CREATE INDEX IF NOT EXISTS idx_logs_operation ON api_logs(operation);
 CREATE INDEX IF NOT EXISTS idx_scenarios_scene ON scenarios(scene_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_student ON sessions(user_student_id);
+
+-- Cursor 多角色迴圈看板；與 Gemini api_calls / api_logs 分開，不要合併
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id                 TEXT PRIMARY KEY, -- crypto.randomUUID()
+  user_id            TEXT NOT NULL,    -- = user.id；不加 FK 到 "user"；查詢一律過濾此欄
+  source_request     TEXT NOT NULL,    -- 使用者原始需求；trim 後寫入，最長 4000
+  spec_slug          TEXT,             -- 可空；最長 128
+  status             TEXT NOT NULL CHECK (status IN ('running','passed','stopped')), -- 建立時 running
+  latest_role        TEXT,             -- 最後一則 turn 的角色；尚無 turn 為 NULL
+  latest_kind        TEXT,
+  latest_review_pass INTEGER,          -- 1 或 2
+  latest_outcome     TEXT,
+  latest_next_step   TEXT,
+  created_at         INTEGER NOT NULL, -- epoch ms
+  updated_at         INTEGER NOT NULL  -- 每次 turn / PATCH 更新
+);
+
+CREATE TABLE IF NOT EXISTS agent_turns (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id          TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+  user_id         TEXT NOT NULL, -- 必須等於父列 agent_runs.user_id
+  role            TEXT NOT NULL CHECK (role IN ('orchestrator','pm','qa','frontend','backend')),
+  kind            TEXT NOT NULL CHECK (kind IN ('produce','review','fix')),
+  review_pass     INTEGER NOT NULL CHECK (review_pass IN (1, 2)),
+  outcome         TEXT NOT NULL CHECK (outcome IN ('pass','must-fix','stop','ok','error')),
+  goal            TEXT,          -- 最長 4000
+  changes         TEXT,
+  next_step       TEXT,          -- 決策區「下一步」
+  feedback        TEXT,
+  decision        TEXT,          -- 決策區「決策」
+  difficulty_kind TEXT CHECK (difficulty_kind IN ('must-fix','stop-leftover','same-file-conflict') OR difficulty_kind IS NULL),
+  tokens_in       INTEGER,       -- Cursor 子代理輸入 token；未知則 NULL，不估算、不寫進 api_calls
+  tokens_out      INTEGER,       -- 同上
+  created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_user_updated ON agent_runs(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_turns_run ON agent_turns(run_id, id);
+CREATE INDEX IF NOT EXISTS idx_agent_turns_user ON agent_turns(user_id, created_at);
 ```
 
 better-auth 的四張表（`migrations/0003_auth.sql`）：
@@ -221,6 +270,8 @@ wrangler d1 migrations apply fluently_db --remote  # 正式
 | `0002_seed.sql` | 場景、Bella 音色、8 個情境（**不**再種 `default` 學習者） |
 | `0003_auth.sql` | better-auth 的 `user` / `session` / `account` / `verification` |
 | `0004_user_link.sql` | 刪掉還存在的 seed `default` 學習者（沒有 sessions 才刪） |
+| `0005_agent_loop.sql` | `agent_runs` / `agent_turns`（Cursor 角色迴圈看板；不碰 Gemini 用量） |
+| `0006_session_reviews.sql` | `session_reviews`（一段練習一筆談話回饋）。`api_calls.kind` 可為 `review`；**不**重建 `api_calls` |
 
 列表與對話頁的 `getScenario()` / `listScenarios()` **讀 DB**，不再直接讀 TS 陣列。
 
@@ -242,10 +293,15 @@ erDiagram
   sessions }o--|| scenarios : of
   sessions }o--|| user_students : by
   sessions ||--o{ messages : has
+  sessions ||--o| session_reviews : debrief
   sessions ||--o{ api_calls : billed
   messages }o--o| user_students : learner
   messages }o--o| characters : tutor
+  user ||--o{ agent_runs : "loop board"
+  agent_runs ||--o{ agent_turns : has
 ```
+
+`agent_runs.user_id` 在 schema 上**沒有** FK 到 `"user"`（與練習表一樣用應用層過濾）；圖上的連線只表示邏輯歸屬。
 
 `session`（better-auth 登入 cookie）與 `sessions`（一段練習對話）是兩張不同的表，不要搞混。
 
@@ -259,13 +315,16 @@ erDiagram
 | `elevenlabs_voices` | 那個角色用哪顆 ElevenLabs 音色（`is_free` 標記免費方案可用） |
 | `sessions` | 這段練習屬於誰、哪個情境 |
 | `messages` | **記憶**——每次呼叫 Gemini 時整段歷史都從這裡撈出來重送 |
-| `api_calls` | **用量帳**——一列 = 一次計費呼叫，`kind` 分對話與語音 |
+| `session_reviews` | **談話後回饋**——一段練習最多一列 Canonical JSON（建議／單字／文法／句子） |
+| `api_calls` | **用量帳**——一列 = 一次計費呼叫，`kind` 分對話、語音與談話回饋 |
 | `api_logs` | **原始紀錄**——一列 = 一次對外呼叫，含送出/收到的實際內容與狀態碼 |
+| `agent_runs` | **需求執行**——一次 Cursor 多角色迴圈（編排器 → PM → QA → 前端/後端） |
+| `agent_turns` | 該迴圈裡每一個角色產出／審查／修復；token 可為 NULL |
 
 `messages` 與 `api_calls` 刻意分開：一次失敗的呼叫不會產生 AI 訊息，
 但它**仍然是一次呼叫**，必須計入用量與錯誤率。
 
-「來回次數」只數 `kind='chat'`——語音合成是附加成本，不是一次對話往返，
+「來回次數」只數 `kind='chat'`——語音合成與談話回饋是附加成本，不是一次對話往返，
 混在一起數會讓「練了幾輪」這個數字失真。
 
 ### `api_calls` 與 `api_logs` 的差別
@@ -276,19 +335,28 @@ erDiagram
 |---|---|---|
 | 用途 | 用量統計與聚合 | 除錯與稽核 |
 | 記錄什麼 | token 數、延遲、成敗 | 連同**實際送出與收到的文字**、HTTP 狀態碼、平台、端點 |
-| 涵蓋範圍 | 對話與語音 | **所有**對外呼叫，含不花 token 的 `verify-key` |
+| 涵蓋範圍 | 對話、語音與談話回饋 | **所有**對外呼叫，含不花 token 的 `verify-key` |
 | 外鍵 | 有（`session_id`） | **無**——記錄失敗絕不能拖垮請求 |
 
 `/usage` 的「各情境用量」以 `api_calls JOIN sessions` 取 `scenario_id`，不再讀 `api_calls.scenario_id`。
 
 `logApiCall()` 內部包了 try/catch，寫入失敗只會在 console 留一行錯誤，不會讓 API 呼叫失敗。
 
+### 不要把角色迴圈併進 `api_calls`
+
+`agent_runs` / `agent_turns` 是**第二條用量流**：記的是 Cursor 子代理的 Goal / Changes / Next Step、Must-fix、STOP，以及可為 NULL 的 `tokens_in` / `tokens_out`。
+
+- **不要**寫進 `api_calls` 或 `api_logs`（含密鑰被拒的請求也不寫 log）。
+- **不要**估算缺失的 token；省略或 JSON `null` 存 SQL NULL。`SUM` 全為 NULL 時聚合也是 NULL，UI 顯示 — 而不是 `0`。
+- Gemini `/usage` 仍只讀 `api_calls`（`getTotals` 等），行為不變。
+- 頁面（`/runs`）import `listAgentRuns` / `getAgentRun` / `countAgentRunsByStatus`，讀 **snake_case**。`GET /api/runs*` 是同一組欄位的 camelCase 包裝，給編排器 POST/PATCH 用。
+
 ---
 
 ## 2. Token 與來回次數怎麼算
 
 **不是估算的。** 數字直接取自 Gemini 回應的 `usageMetadata`
-（[`lib/gemini.ts`](../lib/gemini.ts) 的 `generateReply`）：
+（[`lib/gemini.ts`](../lib/gemini.ts) 的 `generateReply` / `generateReview`）：
 
 | 顯示名稱 | 來源欄位 |
 |---|---|
@@ -298,7 +366,8 @@ erDiagram
 | 總計 | `totalTokenCount` |
 
 **來回次數** = `api_calls` 中 `kind='chat'` 的列數。成功與失敗都算，因為兩者都送出了請求。
-語音合成另外統計（`kind='tts'`），用量頁分成兩張卡。
+語音合成另外統計（`kind='tts'`），談話回饋另計（`kind='review'`），用量頁分成兩張卡（對話／語音）；
+回饋 token 會進未篩選的「全部 token」與每日序列，但不進「來回」與各情境「只計對話」。
 
 注意 `promptTokenCount` 會隨對話變長而**持續增加**——每次呼叫都重送整段歷史。
 這是自管記憶的必然代價，用量頁的「輸入 / 輸出」比例就是在觀察這件事。
@@ -307,6 +376,25 @@ erDiagram
 聚合查詢都在 `lib/db.ts`：`getTotals`、`getUsageByScenario`、`getDailyUsage`、
 `getRecentSessions`、`getRecentCalls`、`getSessionStats`。
 觀察介面在 [`/usage`](../app/usage/page.tsx)。
+
+談話回饋 helpers（一律 `user_student_id = user.id`）：
+
+| Helper | 用途 |
+|---|---|
+| `getSession(sessionId, userId)` | 練習列；找不到或非本人 → `undefined`。POST 用 `scenario_id` → `getScenario` |
+| `getSessionReview(sessionId, userId)` | `{ id, session_id, user_student_id, payload, model, created_at }`；不符 → `undefined`。呼叫端 `parseSessionReview(payload)` |
+| `insertSessionReview({ sessionId, userId, payload, model })` | 成功產生後 INSERT；UNIQUE 衝突由 route 重讀 |
+| `deleteSessionReview(sessionId, userId)` | 明確 POST 遇到壞 payload 時先刪再產生 |
+| `countUserMessages(sessionId, userId)` | 該擁有 session 的 `role='user'` 則數。須在 `sessionExists` 之後才呼叫 |
+
+角色迴圈看板的查詢也在 `lib/db.ts`（**不要**跟上面這組混用）：
+
+| Helper | 用途 |
+|---|---|
+| `listAgentRuns(userId)` | 該使用者最近 50 筆 run（`updated_at DESC`），含 `tokens_in_sum` / `tokens_out_sum`（全 NULL 則 NULL）與 `turn_count` |
+| `getAgentRun(userId, id)` | 單筆 run + turns（`id ASC`）；找不到或 `user_id` 不符回 `undefined` |
+| `countAgentRunsByStatus(userId)` | 全部 run 的 `running_count` / `passed_count` / `stopped_count`（不受 50 筆上限） |
+| `createAgentRun` / `appendAgentTurn` / `patchAgentRun` | API 寫入；一律帶 `user_id` |
 
 ---
 
@@ -322,13 +410,26 @@ Google 現在推薦新專案用 Interactions API，但它**把對話歷史存在
 （`previous_interaction_id`），與本專案「用 SQLite 做記憶」的前提直接衝突。
 `generateContent` 仍受完整支援，且我們自己管歷史，所以維持使用它。
 
-### System instruction
+### System instruction（對話）
 
 由 `buildSystemInstruction(scenario)` 從情境資料組出來，用到
 `persona`、`title`、`blurb`、`level`、`focus` 五個欄位（見 [SCENARIOS.md](SCENARIOS.md)）。
 內容包含：角色設定、場景、依難度調整的語言複雜度、要引導的句型，
 以及幾條硬規則（不出戲、只用英文、1–3 句加一個問題、純口語不要 markdown——
-因為回覆會被語音合成唸出來）。
+因為回覆會被語音合成唸出來）。**談話回饋不走這條 prompt。**
+
+### 談話回饋（`generateReview`）
+
+學習者明確結束對話後，[`app/api/review/route.ts`](../app/api/review/route.ts) 另呼
+`generateReview` + `buildReviewInstruction(scenario)`（教練口吻，**不是**角色扮演）。
+情境來自 `sessions.scenario_id` → `getScenario`，不是 POST body 的 `scenarioId`。
+
+- `temperature: 0.4`、`maxOutputTokens: 2048`
+- `responseMimeType: application/json` + `responseSchema` 對準 Canonical 鍵：
+  `advice` / `vocabulary` / `grammar` / `sentences`
+- token 只信 `usageMetadata`；`recordCall({ kind: "review" })`；`onCall.operation = "review"`
+- 失敗仍寫 `api_calls` `ok=0`，**不**寫 `session_reviews`
+- 型別 `SessionReview` 與 `parseSessionReview` 從 [`lib/gemini.ts`](../lib/gemini.ts) 匯出（此檔不可 import DB）
 
 ---
 
@@ -338,7 +439,7 @@ Google 現在推薦新專案用 Interactions API，但它**把對話歷史存在
 需要 `VOICES`、`DEFAULT_MODEL` 這些常數），所以**那個檔案裡絕對不能 import 資料庫**，
 否則前端 build 會炸。
 
-因此改用回呼：`generateReply` / `synthesizeSpeech` / `verifyKey` 都接受一個
+因此改用回呼：`generateReply` / `generateReview` / `synthesizeSpeech` / `verifyKey` 都接受一個
 `onCall?: ApiCallLogger`，在 fetch 回來後**不論成敗**都會帶著完整的 `ApiCallRecord` 觸發一次。
 Route handler（server-only）再傳 `onCall: (call) => logApiCall({ ...call, sessionId })` 進去。
 
@@ -503,6 +604,18 @@ Voice Library 的音色在免費方案會回 402，畫面會說明原因並改�
 `/chat/[id]?session=<id>` 可以續接舊對話，用量頁的「最近的對話」就是連到這個。
 `?mode=` 決定進哪一種介面（`script` / `live`）；兩者都走同一組 API 與資料表，
 差別只在前端呈現。`sessions.mode` 記下這段對話是用哪個模式開始的。
+已產生的回饋從 `session_reviews` 讀；RSC 用 `getSessionReview` + `parseSessionReview`，
+壞 payload 就當沒有（不自動 POST）。
+
+[`app/api/review/route.ts`](../app/api/review/route.ts) 是談話後回饋：
+
+1. 驗登入（401 `請先登入`）與 `resolveGeminiApiKey`（與 `/api/chat` 相同）
+2. Lookup：缺 `sessionId` → 400；`sessionExists` 否 → 404 `找不到這段對話`；
+   擁有的 session 沒有 `role='user'` 訊息 → 400（不呼叫 Gemini、不寫 `api_calls`）
+3. `getSession` → `getScenario(session.scenario_id)`；目錄列缺失 → 502，不呼叫 Gemini
+4. 既有 `session_reviews.payload` 是合法 `SessionReview` → **200** `cached: true`（不再呼叫 Gemini）
+5. 沒有列或 payload 壞掉：刪掉壞列 → `generateReview` → INSERT → **201** `cached: false`
+6. 失敗：`api_calls` `kind='review'` `ok=0`，HTTP `error` 固定為「回饋沒有產生，請再試一次。」
 
 [`app/api/speak/route.ts`](../app/api/speak/route.ts) 與 [`app/api/elevenlabs/route.ts`](../app/api/elevenlabs/route.ts) 是同樣的形狀：驗 key → 驗音色 →
 （必要時建 session）→ 合成 → 寫 `api_calls`（`kind='tts'`）→ 回傳音訊。

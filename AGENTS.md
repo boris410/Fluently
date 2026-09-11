@@ -57,3 +57,24 @@ Gemini 串接方式、API key 流向、token 與來回次數的計算來源，�
 ```bash
 npm run build && npm run lint
 ```
+
+## 多角色（自動迴圈）
+
+使用者只要丟產品需求。主 Agent 當編排器，用 Task 叫專案子代理，不必開四個 Agents 視窗。
+
+流程：`pm` 寫 [`docs/specs/`](docs/specs/) → `qa` 審規格 → `frontend` 與 `backend` 平行實作 → `qa` 對 `git diff`。細節在 [`.cursor/skills/fluently-feature-loop/SKILL.md`](.cursor/skills/fluently-feature-loop/SKILL.md)。角色提示詞在 [`.cursor/agents/`](.cursor/agents/)，檔案觸發規則在 [`.cursor/rules/`](.cursor/rules/)。
+
+**修復審查上限：** 每個角色獨立計算。產出 1 → QA 審 1 → 僅允許修 1 次 → QA 審 2。第 2 次仍有 Must-fix 就停止該角色，不再修。PM 在規格階段被停則不進實作。Should-fix 不啟動修復輪。
+
+規格用 [`docs/specs/_template.md`](docs/specs/_template.md)。每次交接輸出 Goal / Changes / Next Step。
+
+檔案所有權：
+
+- PM：`docs/specs/`（改情境目錄才動 `docs/SCENARIOS.md`）
+- 前端：`components/`、pages/layouts、`lib/use-*.ts`、`lib/scene-clips.ts`、`docs/DESIGN.md`
+- 後端：`app/api/`、`migrations/`、`docs/DATA.md`、非 UI 的 `lib/`（db / auth / gemini / speech）
+- QA：只寫 `docs/specs/*-qa.md`，不改產品碼
+
+同一檔有衝突就停、寫進 Next Step，不要兩邊一起改。`wrangler secret` 與 Google Console 仍是人做。不要把 `.env.local` / `.dev.vars` 寫進規格或 commit。
+
+純提問、OAuth/secret 設定、使用者已指定檔案的單點修正：不要開迴圈。若要手動開 Agent，每個執行緒只掛一個角色規則，前後端用不同 worktree。

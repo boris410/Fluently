@@ -30,7 +30,7 @@ export type StoredMessage = {
   created_at: number;
 };
 
-export type CallKind = "chat" | "tts";
+export type CallKind = "chat" | "tts" | "review";
 
 export type ApiCall = {
   id: number;
@@ -258,6 +258,96 @@ export async function sessionExists(
     "SELECT 1 AS one FROM sessions WHERE id = ? AND user_student_id = ?",
     [id, userId],
   ));
+}
+
+export type PracticeSession = {
+  id: string;
+  scenario_id: string;
+  user_student_id: string;
+  mode: SessionMode;
+  created_at: number;
+  updated_at: number;
+};
+
+export async function getSession(
+  sessionId: string,
+  userId: string,
+): Promise<PracticeSession | undefined> {
+  const db = await getDb();
+  return db.first<PracticeSession>(
+    `SELECT id, scenario_id, user_student_id, mode, created_at, updated_at
+       FROM sessions
+      WHERE id = ? AND user_student_id = ?
+      LIMIT 1`,
+    [sessionId, userId],
+  );
+}
+
+export type SessionReviewRow = {
+  id: string;
+  session_id: string;
+  user_student_id: string;
+  payload: string;
+  model: string;
+  created_at: number;
+};
+
+export async function getSessionReview(
+  sessionId: string,
+  userId: string,
+): Promise<SessionReviewRow | undefined> {
+  const db = await getDb();
+  return db.first<SessionReviewRow>(
+    `SELECT id, session_id, user_student_id, payload, model, created_at
+       FROM session_reviews
+      WHERE session_id = ? AND user_student_id = ?
+      LIMIT 1`,
+    [sessionId, userId],
+  );
+}
+
+export async function insertSessionReview(row: {
+  sessionId: string;
+  userId: string;
+  payload: string;
+  model: string;
+}): Promise<string> {
+  const db = await getDb();
+  const id = crypto.randomUUID();
+  await db.run(
+    `INSERT INTO session_reviews
+       (id, session_id, user_student_id, payload, model, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [id, row.sessionId, row.userId, row.payload, row.model, Date.now()],
+  );
+  return id;
+}
+
+export async function deleteSessionReview(
+  sessionId: string,
+  userId: string,
+): Promise<void> {
+  const db = await getDb();
+  await db.run(
+    "DELETE FROM session_reviews WHERE session_id = ? AND user_student_id = ?",
+    [sessionId, userId],
+  );
+}
+
+/** Learner utterances only. Call after sessionExists is true — not an ownership check. */
+export async function countUserMessages(
+  sessionId: string,
+  userId: string,
+): Promise<number> {
+  const db = await getDb();
+  const row = await db.first<{ n: number }>(
+    `SELECT COUNT(*) AS n
+       FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+      WHERE m.session_id = ? AND s.user_student_id = ? AND m.role = 'user'`,
+    [sessionId, userId],
+  );
+  return Number(row?.n ?? 0);
 }
 
 export async function appendMessage(
@@ -697,4 +787,303 @@ export async function getLogOperations(userId: string): Promise<string[]> {
     [userId],
   );
   return rows.map((r) => r.operation);
+}
+
+// --- agent loop board (isolated from api_calls / api_logs) ---------------
+
+export type AgentRunStatus = "running" | "passed" | "stopped";
+
+export type AgentRunListRow = {
+  id: string;
+  user_id: string;
+  source_request: string;
+  spec_slug: string | null;
+  status: AgentRunStatus;
+  latest_role: string | null;
+  latest_kind: string | null;
+  latest_review_pass: 1 | 2 | null;
+  latest_outcome: string | null;
+  latest_next_step: string | null;
+  tokens_in_sum: number | null;
+  tokens_out_sum: number | null;
+  turn_count: number;
+  created_at: number;
+  updated_at: number;
+};
+
+export type AgentTurnRow = {
+  id: number;
+  run_id: string;
+  user_id: string;
+  role: string;
+  kind: string;
+  review_pass: 1 | 2;
+  outcome: string;
+  goal: string | null;
+  changes: string | null;
+  next_step: string | null;
+  feedback: string | null;
+  decision: string | null;
+  difficulty_kind: string | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  created_at: number;
+};
+
+export type AgentRunStatusCounts = {
+  running_count: number;
+  passed_count: number;
+  stopped_count: number;
+};
+
+export type AgentTurnInsert = {
+  role: string;
+  kind: string;
+  reviewPass: 1 | 2;
+  outcome: string;
+  goal: string | null;
+  changes: string | null;
+  nextStep: string | null;
+  feedback: string | null;
+  decision: string | null;
+  difficultyKind: string | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+};
+
+function numOrNull(value: unknown): number | null {
+  if (value == null) return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function hydrateRun(row: AgentRunListRow): AgentRunListRow {
+  const pass = numOrNull(row.latest_review_pass);
+  return {
+    ...row,
+    spec_slug: row.spec_slug ?? null,
+    latest_role: row.latest_role ?? null,
+    latest_kind: row.latest_kind ?? null,
+    latest_review_pass: pass === 1 || pass === 2 ? pass : null,
+    latest_outcome: row.latest_outcome ?? null,
+    latest_next_step: row.latest_next_step ?? null,
+    tokens_in_sum: numOrNull(row.tokens_in_sum),
+    tokens_out_sum: numOrNull(row.tokens_out_sum),
+    turn_count: Number(row.turn_count ?? 0),
+    created_at: Number(row.created_at),
+    updated_at: Number(row.updated_at),
+  };
+}
+
+function hydrateTurn(row: AgentTurnRow): AgentTurnRow {
+  const pass = Number(row.review_pass);
+  return {
+    ...row,
+    goal: row.goal ?? null,
+    changes: row.changes ?? null,
+    next_step: row.next_step ?? null,
+    feedback: row.feedback ?? null,
+    decision: row.decision ?? null,
+    difficulty_kind: row.difficulty_kind ?? null,
+    tokens_in: numOrNull(row.tokens_in),
+    tokens_out: numOrNull(row.tokens_out),
+    review_pass: pass === 2 ? 2 : 1,
+    created_at: Number(row.created_at),
+  };
+}
+
+const AGENT_RUN_LIST_SELECT = `
+  SELECT
+    r.id,
+    r.user_id,
+    r.source_request,
+    r.spec_slug,
+    r.status,
+    r.latest_role,
+    r.latest_kind,
+    r.latest_review_pass,
+    r.latest_outcome,
+    r.latest_next_step,
+    (SELECT SUM(t.tokens_in) FROM agent_turns t
+      WHERE t.run_id = r.id AND t.user_id = r.user_id) AS tokens_in_sum,
+    (SELECT SUM(t.tokens_out) FROM agent_turns t
+      WHERE t.run_id = r.id AND t.user_id = r.user_id) AS tokens_out_sum,
+    (SELECT COUNT(*) FROM agent_turns t
+      WHERE t.run_id = r.id AND t.user_id = r.user_id) AS turn_count,
+    r.created_at,
+    r.updated_at
+  FROM agent_runs r
+`;
+
+export async function listAgentRuns(userId: string): Promise<AgentRunListRow[]> {
+  const db = await getDb();
+  const rows = await db.all<AgentRunListRow>(
+    `${AGENT_RUN_LIST_SELECT}
+     WHERE r.user_id = ?
+     ORDER BY r.updated_at DESC
+     LIMIT 50`,
+    [userId],
+  );
+  return rows.map(hydrateRun);
+}
+
+export async function getAgentRun(
+  userId: string,
+  id: string,
+): Promise<{ run: AgentRunListRow; turns: AgentTurnRow[] } | undefined> {
+  const db = await getDb();
+  const row = await db.first<AgentRunListRow>(
+    `${AGENT_RUN_LIST_SELECT} WHERE r.id = ? AND r.user_id = ? LIMIT 1`,
+    [id, userId],
+  );
+  if (!row) return undefined;
+  const turns = await db.all<AgentTurnRow>(
+    `SELECT * FROM agent_turns
+      WHERE run_id = ? AND user_id = ?
+      ORDER BY id ASC`,
+    [id, userId],
+  );
+  return { run: hydrateRun(row), turns: turns.map(hydrateTurn) };
+}
+
+export async function countAgentRunsByStatus(
+  userId: string,
+): Promise<AgentRunStatusCounts> {
+  const db = await getDb();
+  const row = await db.first<AgentRunStatusCounts>(
+    `SELECT
+       COALESCE(SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END), 0) AS running_count,
+       COALESCE(SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END), 0) AS passed_count,
+       COALESCE(SUM(CASE WHEN status = 'stopped' THEN 1 ELSE 0 END), 0) AS stopped_count
+     FROM agent_runs
+     WHERE user_id = ?`,
+    [userId],
+  );
+  return {
+    running_count: Number(row?.running_count ?? 0),
+    passed_count: Number(row?.passed_count ?? 0),
+    stopped_count: Number(row?.stopped_count ?? 0),
+  };
+}
+
+export async function createAgentRun(
+  userId: string,
+  sourceRequest: string,
+  specSlug: string | null,
+): Promise<AgentRunListRow> {
+  const db = await getDb();
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  await db.run(
+    `INSERT INTO agent_runs
+       (id, user_id, source_request, spec_slug, status,
+        latest_role, latest_kind, latest_review_pass, latest_outcome, latest_next_step,
+        created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'running', NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+    [id, userId, sourceRequest, specSlug, now, now],
+  );
+  const created = await getAgentRun(userId, id);
+  if (!created) throw new Error("agent_run insert missing");
+  return created.run;
+}
+
+export async function appendAgentTurn(
+  userId: string,
+  runId: string,
+  turn: AgentTurnInsert,
+): Promise<AgentTurnRow | undefined> {
+  const db = await getDb();
+  const parent = await db.first<{ id: string }>(
+    "SELECT id FROM agent_runs WHERE id = ? AND user_id = ?",
+    [runId, userId],
+  );
+  if (!parent) return undefined;
+
+  const now = Date.now();
+  const inserted = await db.run(
+    `INSERT INTO agent_turns
+       (run_id, user_id, role, kind, review_pass, outcome,
+        goal, changes, next_step, feedback, decision, difficulty_kind,
+        tokens_in, tokens_out, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      runId,
+      userId,
+      turn.role,
+      turn.kind,
+      turn.reviewPass,
+      turn.outcome,
+      turn.goal,
+      turn.changes,
+      turn.nextStep,
+      turn.feedback,
+      turn.decision,
+      turn.difficultyKind,
+      turn.tokensIn,
+      turn.tokensOut,
+      now,
+    ],
+  );
+
+  await db.run(
+    `UPDATE agent_runs SET
+       latest_role = ?,
+       latest_kind = ?,
+       latest_review_pass = ?,
+       latest_outcome = ?,
+       latest_next_step = ?,
+       status = CASE WHEN ? = 'stop' THEN 'stopped' ELSE status END,
+       updated_at = ?
+     WHERE id = ? AND user_id = ?`,
+    [
+      turn.role,
+      turn.kind,
+      turn.reviewPass,
+      turn.outcome,
+      turn.nextStep,
+      turn.outcome,
+      now,
+      runId,
+      userId,
+    ],
+  );
+
+  const row = await db.first<AgentTurnRow>(
+    "SELECT * FROM agent_turns WHERE id = ? AND user_id = ?",
+    [inserted.lastInsertRowid, userId],
+  );
+  return row ? hydrateTurn(row) : undefined;
+}
+
+export async function patchAgentRun(
+  userId: string,
+  runId: string,
+  patch: { status?: "passed" | "stopped"; specSlug?: string | null },
+): Promise<AgentRunListRow | undefined> {
+  const db = await getDb();
+  const existing = await db.first<{ id: string }>(
+    "SELECT id FROM agent_runs WHERE id = ? AND user_id = ?",
+    [runId, userId],
+  );
+  if (!existing) return undefined;
+
+  const now = Date.now();
+  const specProvided = "specSlug" in patch ? 1 : 0;
+  await db.run(
+    `UPDATE agent_runs SET
+       status = COALESCE(?, status),
+       spec_slug = CASE WHEN ? = 1 THEN ? ELSE spec_slug END,
+       updated_at = ?
+     WHERE id = ? AND user_id = ?`,
+    [
+      patch.status ?? null,
+      specProvided,
+      specProvided ? (patch.specSlug ?? null) : null,
+      now,
+      runId,
+      userId,
+    ],
+  );
+  const updated = await getAgentRun(userId, runId);
+  return updated?.run;
 }
