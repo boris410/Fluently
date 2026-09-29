@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { SceneStage } from "@/components/scene-stage";
+import { TalkMic } from "@/components/talk-mic";
 import type { Scenario } from "@/lib/scenarios";
 import type { ScenePhase } from "@/lib/scene-clips";
-import { canListen, listen, stopSpeaking } from "@/lib/speech";
+import { stopSpeaking } from "@/lib/speech";
+import { useHoldMic } from "@/lib/use-hold-mic";
 import {
   type ChatTurn,
   type Stats,
@@ -14,13 +16,9 @@ import {
 } from "@/lib/use-conversation";
 
 /**
- * Immersive mode: no transcript, no buttons to press. The tutor speaks, the
- * mic opens by itself, and pausing sends the turn — the way a real
- * conversation goes. The transcript view is `ChatRoom`.
+ * Immersive mode: no transcript. The tutor speaks, then the learner taps
+ * the mic to talk and taps again to send — pauses do not send.
  */
-
-/** Stop retrying after this many turns where nothing was heard. */
-const SILENT_LIMIT = 3;
 
 const PHASE_LABEL: Record<ScenePhase, string> = {
   warming: "歡迎光臨…",
@@ -44,16 +42,6 @@ export function LiveRoom({
 }) {
   const router = useRouter();
   const [paused, setPaused] = useState(false);
-  const [listening, setListening] = useState(false);
-  const [stalled, setStalled] = useState(false);
-
-  const stopListenRef = useRef<(() => void) | null>(null);
-  const pausedRef = useRef(false);
-  const silentTries = useRef(0);
-  /** Whether the current dictation turn produced any final text. */
-  const heardRef = useRef(false);
-
-  const startListeningRef = useRef<() => void>(() => {});
 
   const conversation = useConversation({
     scenario,
@@ -62,8 +50,6 @@ export function LiveRoom({
     initialStats,
     mode: "live",
     forceSpeak: true,
-    // The tutor finished a line on its own — hand the floor over.
-    onSpeechFinished: () => startListeningRef.current(),
   });
 
   const {
@@ -83,103 +69,41 @@ export function LiveRoom({
     reviewPending,
   } = conversation;
 
-  const stopListening = useCallback(() => {
-    stopListenRef.current?.();
-    stopListenRef.current = null;
-    setListening(false);
-  }, []);
+  const tutorBusy = pending || speakState !== "idle";
+  const { listening, voicing, level, toggle, close, supported } = useHoldMic({
+    busy: tutorBusy,
+    onSend: (text) => void send(text),
+    setError,
+  });
 
-  const startListening = useCallback(() => {
-    // Never open the mic while the tutor is audible: it would record the
-    // tutor's own voice and answer itself.
-    if (pausedRef.current || stopListenRef.current) return;
-
-    heardRef.current = false;
-    const stop = listen({
-      onStart: () => {
-        setListening(true);
-        setStalled(false);
-      },
-      onText: (text, isFinal) => {
-        if (!isFinal || !text) return;
-        heardRef.current = true;
-        silentTries.current = 0;
-        stopListening();
-        void send(text);
-      },
-      onError: (err) => {
-        setListening(false);
-        if (err === "no-speech" || err === "aborted") return;
-        stopListenRef.current = null;
-        if (err === "not-allowed") {
-          setError("瀏覽器擋住了麥克風權限，真實情境模式需要它才能運作。");
-        } else {
-          setError(`語音辨識失敗：${err}`);
-        }
-        setPaused(true);
-        pausedRef.current = true;
-      },
-      onEnd: () => {
-        setListening(false);
-        stopListenRef.current = null;
-        if (heardRef.current || pausedRef.current) return;
-
-        // Nothing was said. Reopen the mic, but give up after a few tries so
-        // a muted microphone cannot spin forever.
-        silentTries.current += 1;
-        if (silentTries.current >= SILENT_LIMIT) {
-          setStalled(true);
-          return;
-        }
-        window.setTimeout(() => startListeningRef.current(), 400);
-      },
-    });
-
-    if (!stop) {
-      setListening(false);
-      return;
-    }
-    stopListenRef.current = stop;
-  }, [send, setError, stopListening]);
-
-  // Indirection through a ref keeps the loop callable from timers and from
-  // the conversation hook without recreating either of them every render.
+  // Never keep the mic open while the tutor is audible or thinking: it
+  // would record the tutor's own voice and answer itself.
   useEffect(() => {
-    startListeningRef.current = startListening;
-  }, [startListening]);
+    if (tutorBusy) close();
+  }, [tutorBusy, close]);
 
   useEffect(
     () => () => {
-      stopListenRef.current?.();
+      close();
       stopSpeaking();
     },
-    [],
+    [close],
   );
 
   const togglePause = useCallback(() => {
-    const next = !pausedRef.current;
-    pausedRef.current = next;
-    setPaused(next);
-    if (next) {
-      stopListening();
-      stopSpeaking();
-    } else {
-      silentTries.current = 0;
-      setStalled(false);
-      startListeningRef.current();
-    }
-  }, [stopListening]);
-
-  const retry = useCallback(() => {
-    silentTries.current = 0;
-    setStalled(false);
-    startListeningRef.current();
-  }, []);
+    setPaused((current) => {
+      const next = !current;
+      if (next) {
+        close();
+        stopSpeaking();
+      }
+      return next;
+    });
+  }, [close]);
 
   const finish = useCallback(async () => {
-    pausedRef.current = true;
     setPaused(true);
-    stopListening();
+    close();
     stopSpeaking();
 
     if (!sessionId || !turns.some((t) => t.role === "user")) {
@@ -191,15 +115,7 @@ export function LiveRoom({
     if (result) {
       router.push(`/chat/${scenario.id}?session=${sessionId}&mode=script`);
     }
-  }, [
-    requestReview,
-    router,
-    scenario.id,
-    sessionId,
-    setError,
-    stopListening,
-    turns,
-  ]);
+  }, [close, requestReview, router, scenario.id, sessionId, setError, turns]);
 
   // Opening line is the "customer just walked in" beat — keep the waving
   // still on screen while she greets, instead of swapping to the talking pose.
@@ -213,11 +129,9 @@ export function LiveRoom({
         ? greeting
           ? "warming"
           : "speaking"
-        : listening
-          ? "listening"
-          : stalled
-            ? "stalled"
-            : "warming";
+        : "listening";
+
+  const micLocked = paused || (tutorBusy && !listening) || !supported;
 
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-5 py-10 sm:px-8">
@@ -261,17 +175,20 @@ export function LiveRoom({
           </button>
         )}
 
-        {stalled && (
-          <button
-            type="button"
-            onClick={retry}
-            className="mt-8 w-full rounded-xl border border-line-strong bg-surface px-4 py-3 text-[14px] text-ink transition-colors hover:border-clay hover:text-clay"
-          >
-            沒聽到聲音，點一下再試
-          </button>
-        )}
-
-        {!canListen() && (
+        {supported ? (
+          <div className="mt-8 flex flex-col items-center gap-3">
+            <TalkMic
+              listening={listening}
+              voicing={voicing}
+              level={level}
+              disabled={micLocked}
+              onToggle={toggle}
+            />
+            <p className="text-[12px] leading-5 text-ink-muted">
+              按一下開始說，再說一次送出
+            </p>
+          </div>
+        ) : (
           <p className="mt-8 text-[13px] leading-6 text-ink-muted">
             這個瀏覽器不支援語音輸入，真實情境模式無法運作。
             <Link

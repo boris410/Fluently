@@ -20,7 +20,7 @@ import { type SpeakState, speakReply, stopSpeaking } from "@/lib/speech";
 /**
  * Everything a conversation needs, minus the presentation: sending turns,
  * playing the tutor's voice, and the token tally. Both the transcript view
- * (`ChatRoom`) and the hands-free view (`LiveRoom`) are built on this.
+ * (`ChatRoom`) and the immersive view (`LiveRoom`) are built on this.
  */
 
 export type ChatTurn = {
@@ -56,13 +56,13 @@ export function useConversation({
   initialReview?: SessionReview | null;
   mode?: "script" | "live";
   /**
-   * Speak regardless of the "auto read replies" preference. Hands-free mode
+   * Speak regardless of the "auto read replies" preference. Live mode
    * sets this: a silent live conversation has nothing left to work with.
    */
   forceSpeak?: boolean;
   /**
-   * Fires when a tutor line finishes playing on its own. Hands-free mode
-   * uses it to take the next turn. Not called when playback was stopped.
+   * Fires when a tutor line finishes playing on its own. Not called when
+   * playback was stopped.
    */
   onSpeechFinished?: () => void;
 }) {

@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import Link from "next/link";
 import { Mark } from "@/components/logo";
+import { TalkMic } from "@/components/talk-mic";
 import type { SessionReview } from "@/lib/gemini";
 import type { Scenario } from "@/lib/scenarios";
-import { type SpeakState, canListen, canSpeak, listen } from "@/lib/speech";
+import { type SpeakState, canSpeak } from "@/lib/speech";
+import { useHoldMic } from "@/lib/use-hold-mic";
 import {
   type ChatTurn,
   type Stats,
@@ -15,8 +17,8 @@ import {
 export type { ChatTurn } from "@/lib/use-conversation";
 
 /**
- * Transcript mode: every line is shown, the learner taps the mic to speak or
- * types instead. The immersive counterpart is `LiveRoom`.
+ * Transcript mode: every line is shown; the learner taps the mic to speak
+ * and taps again to send. The immersive counterpart is `LiveRoom`.
  */
 export function ChatRoom({
   scenario,
@@ -59,58 +61,23 @@ export function ChatRoom({
     mode: "script",
   });
 
-  const [draft, setDraft] = useState("");
-  const [listening, setListening] = useState(false);
-  const stopListenRef = useRef<(() => void) | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const tutorBusy = pending || speakState !== "idle";
+  const { listening, voicing, level, toggle, supported } = useHoldMic({
+    busy: tutorBusy,
+    onSend: (text) => void send(text),
+    setError,
+  });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns, pending, review, reviewPending]);
 
-  const submit = useCallback(
-    async (text: string) => {
-      if (!text.trim() || pending) return;
-      stopListenRef.current?.();
-      setListening(false);
-      setDraft("");
-      await send(text);
-      inputRef.current?.focus();
-    },
-    [pending, send],
-  );
-
-  const toggleMic = useCallback(() => {
-    if (listening) {
-      stopListenRef.current?.();
-      stopListenRef.current = null;
-      setListening(false);
-      return;
-    }
-    stopPlayback();
-    const stop = listen({
-      onText: (text, isFinal) => {
-        setDraft(text);
-        if (isFinal && text) void submit(text);
-      },
-      onError: (err) => {
-        setError(
-          err === "not-allowed"
-            ? "瀏覽器擋住了麥克風權限。"
-            : `語音辨識失敗：${err}`,
-        );
-        setListening(false);
-      },
-      onEnd: () => setListening(false),
-    });
-    if (!stop) {
-      setError("這個瀏覽器不支援語音輸入，改用打字吧。");
-      return;
-    }
-    stopListenRef.current = stop;
-    setListening(true);
-  }, [listening, setError, stopPlayback, submit]);
+  const toggleMic = () => {
+    if (!listening) stopPlayback();
+    toggle();
+  };
 
   const endConversation = useCallback(async () => {
     if (!sessionId || !turns.some((t) => t.role === "user")) {
@@ -204,66 +171,32 @@ export function ChatRoom({
         </div>
 
         <div className="sticky bottom-4 mt-6">
-          <div className="rounded-[20px] border border-line bg-surface p-3 shadow-[var(--shadow)] sm:p-4">
-            <textarea
-              ref={inputRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void submit(draft);
-                }
-              }}
-              rows={2}
-              placeholder={
-                listening ? "聽你說…" : "說點什麼，或按麥克風開口說 (Enter 送出)"
-              }
-              className="w-full resize-none bg-transparent px-1 text-[16px] leading-7 text-ink placeholder:text-ink-muted focus:outline-none"
+          <div className="flex flex-col items-center gap-3 rounded-[20px] border border-line bg-surface p-4 shadow-[var(--shadow)] sm:p-5">
+            <TalkMic
+              listening={listening}
+              voicing={voicing}
+              level={level}
+              disabled={!supported || ((tutorBusy || reviewPending) && !listening)}
+              onToggle={toggleMic}
             />
-
-            <div className="mt-2 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-[12px] text-ink-muted">
-                <span className="rounded-full border border-line px-2.5 py-1">
-                  來回 {stats.calls}
-                </span>
-                <span className="rounded-full border border-line px-2.5 py-1">
-                  {stats.totalTokens.toLocaleString()} tokens
-                </span>
-                <Link
-                  href="/usage"
-                  className="hidden transition-colors hover:text-ink sm:inline"
-                >
-                  用量 →
-                </Link>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={toggleMic}
-                  disabled={!canListen() || pending}
-                  aria-pressed={listening}
-                  aria-label="語音輸入"
-                  title={canListen() ? "語音輸入" : "此瀏覽器不支援語音輸入"}
-                  className={`flex h-9 w-9 items-center justify-center rounded-full border transition-colors disabled:opacity-40 ${
-                    listening
-                      ? "border-clay bg-clay text-on-clay"
-                      : "border-line text-ink-soft hover:border-line-strong hover:text-ink"
-                  }`}
-                >
-                  <MicIcon />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void submit(draft)}
-                  disabled={pending || !draft.trim()}
-                  aria-label="送出"
-                  className="flex h-9 w-9 items-center justify-center rounded-full bg-clay text-on-clay transition-opacity hover:opacity-90 disabled:opacity-40"
-                >
-                  <SendIcon />
-                </button>
-              </div>
+            <p className="text-[12px] leading-5 text-ink-muted">
+              {supported
+                ? "按一下開始說，再說一次送出"
+                : "這個瀏覽器不支援語音輸入。"}
+            </p>
+            <div className="flex items-center gap-2 text-[12px] text-ink-muted">
+              <span className="rounded-full border border-line px-2.5 py-1">
+                來回 {stats.calls}
+              </span>
+              <span className="rounded-full border border-line px-2.5 py-1">
+                {stats.totalTokens.toLocaleString()} tokens
+              </span>
+              <Link
+                href="/usage"
+                className="hidden transition-colors hover:text-ink sm:inline"
+              >
+                用量 →
+              </Link>
             </div>
           </div>
 
@@ -437,44 +370,5 @@ function Thinking() {
         ))}
       </div>
     </div>
-  );
-}
-
-function MicIcon() {
-  return (
-    <svg viewBox="0 0 20 20" className="h-[17px] w-[17px]" aria-hidden>
-      <rect
-        x="7.4"
-        y="2.6"
-        width="5.2"
-        height="9"
-        rx="2.6"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-      <path
-        d="M4.6 9.2a5.4 5.4 0 0 0 10.8 0M10 14.6v2.8"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function SendIcon() {
-  return (
-    <svg viewBox="0 0 20 20" className="h-4 w-4" aria-hidden>
-      <path
-        d="M10 16V4m0 0L4.8 9.2M10 4l5.2 5.2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.9"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
   );
 }

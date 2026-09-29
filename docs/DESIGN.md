@@ -142,6 +142,7 @@
 | `.caret` | 游標閃爍 | 打字動畫的游標 |
 | `.pop` | 下拉淡入 0.18s | 彈出面板（設定選單） |
 | `.ripple` | 環狀脈動 2.4s | 真實情境模式「換你說」的狀態圓點 |
+| `.voice-wave` | 聲音波形條 0.65s | 麥克風偵測到語音時，按鈕內的 clay 波形 |
 
 `.glow` 另外被借用在對話的「思考中」三點指示器上（三個點各給不同 `animation-delay`）。
 
@@ -176,6 +177,18 @@ className="rounded-2xl border border-line bg-surface p-5 transition-all duration
 className="rounded-full border border-line bg-surface px-3.5 py-2 text-[13px] text-ink-soft transition-colors hover:border-line-strong hover:text-ink"
 className="rounded-md bg-surface-2 px-2 py-1 text-[12px] text-ink-muted"   // 靜態標籤
 ```
+
+**麥克風按鈕（TalkMic）**
+
+```tsx
+className={`relative flex h-16 w-16 items-center justify-center rounded-full border transition-colors disabled:opacity-40 ${
+  listening
+    ? "border-clay bg-clay text-on-clay shadow-[var(--shadow)]"
+    : "border-line-strong bg-surface text-ink-soft hover:border-clay hover:text-clay"
+}`}
+```
+
+波形條用 `bg-current`（listening 時就是 `text-on-clay`），只在偵測到語音時渲染 `.voice-wave`。
 
 **Header**：`sticky top-0 z-30 border-b border-line/70 bg-canvas/80 backdrop-blur-md`，高度 `h-16`。
 
@@ -286,14 +299,16 @@ className="flex-1 rounded-md px-2 py-1.5 text-[13px] text-ink-soft transition-co
 | [`lib/devtools.ts`](../lib/devtools.ts) | Next.js DevTools dev-server 端點的用戶端（**僅開發模式**） |
 | [`components/settings-menu.tsx`](../components/settings-menu.tsx) | 設定選單：外觀、家教聲音（角色／Gemini／系統）、DevTools |
 | [`app/api/devtools-config/route.ts`](../app/api/devtools-config/route.ts) | 讀取 DevTools 設定檔的 dev-only route handler |
-| [`components/chat-room.tsx`](../components/chat-room.tsx) | 對話介面：訊息氣泡、語音、每回合 token |
+| [`components/chat-room.tsx`](../components/chat-room.tsx) | 獨白式對話：逐字稿、單一麥克風送出、每回合 token |
+| [`components/talk-mic.tsx`](../components/talk-mic.tsx) | 單一麥克風按鈕；偵測到語音才顯示波形 |
+| [`lib/use-hold-mic.ts`](../lib/use-hold-mic.ts) | 按一下開麥、再按送出；停頓不送出 |
 | [`app/usage/page.tsx`](../app/usage/page.tsx) | 用量統計頁：stat tile、長條圖、表格 |
 | [`app/logs/page.tsx`](../app/logs/page.tsx) | API 紀錄頁：篩選 pill、`<details>` 展開列、分頁 |
 | [`app/tts/page.tsx`](../app/tts/page.tsx) | ElevenLabs TTS 測試頁 |
 | [`components/elevenlabs-tts-tester.tsx`](../components/elevenlabs-tts-tester.tsx) | TTS 測試表單：句子、voice id、播放 |
 | [`lib/elevenlabs.ts`](../lib/elevenlabs.ts) | ElevenLabs TTS 客戶端（`onCall` 記 log，不碰資料庫） |
 | [`app/api/elevenlabs/route.ts`](../app/api/elevenlabs/route.ts) | 伺服器轉發 ElevenLabs，key 不進瀏覽器 |
-| [`components/live-room.tsx`](../components/live-room.tsx) | 真實情境模式：舞台、狀態文字、免持迴圈 |
+| [`components/live-room.tsx`](../components/live-room.tsx) | 真實情境模式：舞台、狀態文字、按一下說話 |
 | [`components/scene-stage.tsx`](../components/scene-stage.tsx) | 直式舞台，依 phase 疊層切換靜態圖／影片 |
 | [`lib/scene-clips.ts`](../lib/scene-clips.ts) | 靜態圖與影片清單、fallback 鏈（**唯一寫路徑的地方**） |
 | [`components/mode-picker.tsx`](../components/mode-picker.tsx) | 進入對話前的模式選擇畫面 |

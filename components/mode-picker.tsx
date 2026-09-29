@@ -32,8 +32,8 @@ export function ModePicker({ scenario }: { scenario: Scenario }) {
           href={`/chat/${scenario.id}?mode=script`}
           icon="📝"
           title="獨白式對話"
-          body="看得到逐字稿，按麥克風說話，也可以打字。適合確認自己到底講對沒有。"
-          points={["顯示每一句話", "按鈕控制發言", "可以打字"]}
+          body="看得到逐字稿，按麥克風說話。適合確認自己到底講對沒有。"
+          points={["顯示每一句話", "按一下說話", "再說一次送出"]}
           delay={0}
         />
 
@@ -42,8 +42,8 @@ export function ModePicker({ scenario }: { scenario: Scenario }) {
             href={`/chat/${scenario.id}?mode=live`}
             icon="🎧"
             title="真實情境"
-            body="沒有字幕、不用按按鈕。家教說完自動換你，停頓就送出——像真的在跟人講話。"
-            points={["沒有字幕", "免持自動輪流", "需要麥克風權限"]}
+            body="沒有字幕。家教說完換你按麥克風，停頓不會送出——像對講機。"
+            points={["沒有字幕", "按一下說話", "需要麥克風權限"]}
             delay={60}
             accent
           />
@@ -56,7 +56,7 @@ export function ModePicker({ scenario }: { scenario: Scenario }) {
               真實情境
             </h2>
             <p className="mt-2 text-[14px] leading-6 text-ink-muted">
-              這個瀏覽器不支援語音辨識，免持模式無法運作。
+              這個瀏覽器不支援語音辨識，真實情境無法運作。
               換用 Chrome 或 Safari 就能使用。
             </p>
           </div>

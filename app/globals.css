@@ -160,6 +160,16 @@ body {
   }
 }
 
+@keyframes voice-bar {
+  0%,
+  100% {
+    transform: scaleY(0.55);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
 .rise {
   animation: rise 0.75s cubic-bezier(0.22, 0.7, 0.2, 1) both;
 }
@@ -180,12 +190,34 @@ body {
   animation: ripple 2.4s ease-in-out infinite;
 }
 
+.voice-wave > span {
+  transform-origin: center;
+  animation: voice-bar 0.65s ease-in-out infinite;
+}
+
+.voice-wave > span:nth-child(2) {
+  animation-delay: 0.08s;
+}
+
+.voice-wave > span:nth-child(3) {
+  animation-delay: 0.16s;
+}
+
+.voice-wave > span:nth-child(4) {
+  animation-delay: 0.04s;
+}
+
+.voice-wave > span:nth-child(5) {
+  animation-delay: 0.2s;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rise,
   .glow,
   .caret,
   .pop,
-  .ripple {
+  .ripple,
+  .voice-wave > span {
     animation: none !important;
   }
 }

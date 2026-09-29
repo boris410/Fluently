@@ -493,7 +493,8 @@ ElevenLabs 的 key **只存在** `.env.local` 的 `ELEVENLABS_API_KEY`（沒有 
 ### 學習者開口說（STT）
 
 瀏覽器內建的 `SpeechRecognition` / `webkitSpeechRecognition`，`lang: en-US`，
-**音訊不離開瀏覽器**。只有 Chromium 與 Safari 支援；不支援時介面會說明並退回打字。
+**音訊不離開瀏覽器**。只有 Chromium 與 Safari 支援；不支援時介面會說明。
+兩種模式都是按一下開麥、再按一次送出，停頓不會送出。獨白式沒有打字框。
 
 ### 家教的聲音（TTS）— 三種來源可切換
 
@@ -555,31 +556,30 @@ Voice Library 的音色在免費方案會回 402，畫面會說明原因並改�
 從情境卡片點進來屬於同一個 document 的互動，通常不會被擋；
 直接貼網址或重新整理才比較容易遇到。
 
-### 免持自動輪流（真實情境模式）
+### 按一下說話（兩種模式）
 
-`components/live-room.tsx` 把既有零件串成一個輪流迴圈，**沒有自己做語音活動偵測**——
-`listen()` 的 `continuous: false` 本來就會在講者停頓時自動結束並回傳 final transcript。
+`listenHold()` 用 `continuous: true` 把麥克風維持到使用者再按一次。停頓、呼吸、走路講機式的間斷**都不會送出**。
+音量由 `getUserMedia` + `AnalyserNode` 估 RMS；超過門檻才把麥克風圖示換成波形。
 
 ```
-開場白播放 → (speakState 轉 idle) → 開麥聆聽
-          → (拿到 final transcript) → 送出 → 等回覆
-          → 回覆播放 → (idle) → 再開麥 → …
+開場白播放 → 畫面上出現麥克風（disabled 直到家教說完）
+          → 使用者按一下 → 開麥聆聽
+          → 使用者再按一次 → 送出（沒聽到字就顯示「沒聽到聲音」，不送）
+          → 等回覆 → 回覆播放 → 麥克風再解鎖 → …
 ```
 
 四個必須守住的邊界：
 
 | 情況 | 處理 |
 |---|---|
-| **回音** | `stopListenRef` 有值就不重複開麥；接棒只發生在 `speakState` 轉 `idle` 之後，播放期間麥克風永遠是關的，否則會錄到家教自己的聲音而自問自答 |
-| **靜音** | `onEnd` 但沒收到文字 → 400ms 後重開；連續 `SILENT_LIMIT`（3）次沒聽到就停下並顯示「點一下再試」，不無限重啟 |
-| **權限被拒** | `onError === "not-allowed"` → 暫停迴圈並說明 |
-| **離開頁面** | cleanup 同時 `abort()` 辨識與 `stopSpeaking()` |
+| **回音** | 家教 `pending` 或 `speakState !== idle` 時關麥並禁用按鈕，否則會錄到家教自己的聲音而自問自答 |
+| **停頓** | 不送出、不重開一輪；Chrome 若自行 `onend` 就累積已聽內容並重開辨識，直到使用者按停 |
+| **權限被拒** | `onError === "not-allowed"` → 說明；真實情境仍需要麥克風才能練 |
+| **離開頁面** | cleanup 同時停辨識、關 audio meter 與 `stopSpeaking()` |
 
-`onSpeechFinished` 由 `useConversation` 在播放自然結束時觸發（手動停止不會觸發）。
-真實情境模式帶 `forceSpeak: true`，**無視「自動朗讀」設定**——沒有聲音的沉浸模式沒有意義。
+暫停／繼續**不會**自動開麥。真實情境模式帶 `forceSpeak: true`，**無視「自動朗讀」設定**——沒有聲音的沉浸模式沒有意義。
 
-`recognition.start()` 包在 try/catch 裡：重複啟動會丟 `InvalidStateError`，
-在會反覆自動呼叫的迴圈裡不接住就會整個炸掉。
+`recognition.start()` 包在 try/catch 裡：重複啟動會丟 `InvalidStateError`。
 
 ### 快取與退回
 

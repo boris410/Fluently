@@ -49,51 +49,151 @@ function getRecognitionCtor(): RecognitionCtor | null {
 
 export const canListen = () => getRecognitionCtor() !== null;
 
+const VOICE_ON = 0.07;
+const VOICE_OFF = 0.04;
+
+function startVoiceMeter(
+  onLevel: (level: number, voicing: boolean) => void,
+): () => void {
+  let stopped = false;
+  let raf = 0;
+  let voicing = false;
+  let ctx: AudioContext | null = null;
+  let stream: MediaStream | null = null;
+
+  void (async () => {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (stopped) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      const AC =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!AC) return;
+      ctx = new AC();
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.fftSize);
+
+      const tick = () => {
+        if (stopped) return;
+        analyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128;
+          sum += v * v;
+        }
+        const level = Math.min(1, Math.sqrt(sum / data.length) * 4);
+        if (level >= VOICE_ON) voicing = true;
+        else if (level <= VOICE_OFF) voicing = false;
+        onLevel(level, voicing);
+        raf = window.requestAnimationFrame(tick);
+      };
+      raf = window.requestAnimationFrame(tick);
+    } catch {
+      // Permission or no device — recognition may still work; no waveform.
+    }
+  })();
+
+  return () => {
+    stopped = true;
+    window.cancelAnimationFrame(raf);
+    stream?.getTracks().forEach((t) => t.stop());
+    void ctx?.close();
+  };
+}
+
 /**
- * Starts one dictation turn. `continuous: false` means the browser ends the
- * turn by itself once the speaker pauses, which is what hands-free mode
- * relies on. Returns a stop function, or null when it could not start.
+ * Hold-to-talk dictation. The mic stays open until the caller stops it;
+ * pauses do not send. Returns null if recognition cannot start. `stop()`
+ * yields the accumulated transcript (may be empty).
  */
-export function listen(handlers: {
-  onText: (text: string, isFinal: boolean) => void;
+export function listenHold(handlers: {
   onStart?: () => void;
+  onLevel?: (level: number, voicing: boolean) => void;
+  onPartial?: (text: string) => void;
   onError?: (error: string) => void;
-  onEnd?: () => void;
-}): (() => void) | null {
+}): { stop: () => string } | null {
   const Ctor = getRecognitionCtor();
   if (!Ctor) return null;
 
   const recognition = new Ctor();
   recognition.lang = "en-US";
-  recognition.continuous = false;
+  recognition.continuous = true;
   recognition.interimResults = true;
 
+  let userStop = false;
+  let committed = "";
+  let finals = "";
+  let interim = "";
+  const stopMeter = startVoiceMeter((level, voicing) => {
+    handlers.onLevel?.(level, voicing || interim.length > 0);
+  });
+
+  const snapshot = () =>
+    `${committed} ${finals} ${interim}`.replace(/\s+/g, " ").trim();
+
   recognition.onresult = (event) => {
-    let text = "";
-    let isFinal = false;
+    let nextFinals = "";
+    let nextInterim = "";
     for (let i = 0; i < event.results.length; i++) {
       const result = event.results[i];
-      text += result[0]?.transcript ?? "";
-      if (result.isFinal) isFinal = true;
+      const piece = result[0]?.transcript ?? "";
+      if (result.isFinal) nextFinals += piece;
+      else nextInterim += piece;
     }
-    handlers.onText(text.trim(), isFinal);
+    finals = nextFinals;
+    interim = nextInterim;
+    const text = snapshot();
+    handlers.onPartial?.(text);
+    if (text) handlers.onLevel?.(0.35, true);
   };
   recognition.onstart = () => handlers.onStart?.();
-  recognition.onerror = (event) => handlers.onError?.(event.error);
-  recognition.onend = () => handlers.onEnd?.();
+  recognition.onerror = (event) => {
+    if (event.error === "no-speech" || event.error === "aborted") return;
+    handlers.onError?.(event.error);
+  };
+  recognition.onend = () => {
+    if (userStop) return;
+    // Chrome drops a continuous session on pause; keep what we heard
+    // and reopen so a breath does not wipe the turn.
+    committed = snapshot();
+    finals = "";
+    interim = "";
+    try {
+      recognition.start();
+    } catch {
+      // Already running, or the user stopped between end and restart.
+    }
+  };
 
   try {
     recognition.start();
   } catch (error) {
-    // Starting an already-running recogniser throws InvalidStateError. The
-    // hands-free loop restarts often, so this must never bubble up.
+    stopMeter();
     handlers.onError?.(
       error instanceof DOMException ? error.name : "start-failed",
     );
     return null;
   }
 
-  return () => recognition.abort();
+  return {
+    stop() {
+      userStop = true;
+      stopMeter();
+      try {
+        recognition.stop();
+      } catch {
+        recognition.abort();
+      }
+      return snapshot();
+    },
+  };
 }
 
 // --- speech synthesis (tutor speaking) ----------------------------------
