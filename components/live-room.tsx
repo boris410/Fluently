@@ -185,7 +185,7 @@ export function LiveRoom({
               onToggle={toggle}
             />
             <p className="text-[12px] leading-5 text-ink-muted">
-              按一下開始說，再說一次送出
+              按一下開始說，再說一次送出 · 最長 30 秒
             </p>
           </div>
         ) : (

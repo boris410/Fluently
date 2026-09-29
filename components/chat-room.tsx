@@ -181,7 +181,7 @@ export function ChatRoom({
             />
             <p className="text-[12px] leading-5 text-ink-muted">
               {supported
-                ? "按一下開始說，再說一次送出"
+                ? "按一下開始說，再說一次送出 · 最長 30 秒"
                 : "這個瀏覽器不支援語音輸入。"}
             </p>
             <div className="flex items-center gap-2 text-[12px] text-ink-muted">

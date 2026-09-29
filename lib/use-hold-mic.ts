@@ -3,9 +3,13 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { canListen, listenHold } from "@/lib/speech";
 
+/** Longest a single tap-to-talk turn may stay open. */
+export const LISTEN_LIMIT_MS = 30_000;
+
 /**
  * One-button talk: first press opens the mic, second press stops and
- * returns the transcript. Pauses do not send.
+ * returns the transcript. Pauses do not send. Hits the 30s cap → same as
+ * the second press.
  */
 export function useHoldMic({
   busy,
@@ -21,6 +25,7 @@ export function useHoldMic({
   const [voicing, setVoicing] = useState(false);
   const [level, setLevel] = useState(0);
   const sessionRef = useRef<{ stop: () => string } | null>(null);
+  const timerRef = useRef(0);
 
   const supported = useSyncExternalStore(
     useCallback(() => () => {}, []),
@@ -29,6 +34,8 @@ export function useHoldMic({
   );
 
   const close = useCallback(() => {
+    window.clearTimeout(timerRef.current);
+    timerRef.current = 0;
     const session = sessionRef.current;
     sessionRef.current = null;
     setListening(false);
@@ -39,15 +46,21 @@ export function useHoldMic({
 
   useEffect(() => () => void close(), [close]);
 
-  const toggle = useCallback(() => {
-    if (sessionRef.current) {
-      const text = close();
+  const finishTurn = useCallback(
+    (text: string) => {
       if (text) {
         setError(null);
         onSend(text);
       } else {
         setError("沒聽到聲音");
       }
+    },
+    [onSend, setError],
+  );
+
+  const toggle = useCallback(() => {
+    if (sessionRef.current) {
+      finishTurn(close());
       return;
     }
 
@@ -76,7 +89,11 @@ export function useHoldMic({
     }
     sessionRef.current = session;
     setListening(true);
-  }, [busy, close, onSend, setError]);
+    timerRef.current = window.setTimeout(() => {
+      if (!sessionRef.current) return;
+      finishTurn(close());
+    }, LISTEN_LIMIT_MS);
+  }, [busy, close, finishTurn, setError]);
 
   return { listening, voicing, level, toggle, close, supported };
 }
