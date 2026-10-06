@@ -36,12 +36,15 @@ type ScenarioCatalog = Scenario & {
 | `persona` | AI 扮演的角色 | **英文**，小寫開頭的名詞片語（會被接在 `you play ` 之後）。寫「他是誰」，不要寫他該怎麼說話 |
 | `focus` | 語言學習重點 | **英文、3 個**，是家教要引導出來的能力，不是單字表 |
 | `opening` | 家教的開場白 | **英文一句話（可含兩個短句）**，必須已經在角色裡，並以問句收尾把球丟給使用者 |
+| `endGoal` | 情境任務方向（模型專用） | **英文**，餵給角色扮演與判斷的 `goal_met`；不顯示在任何 UI。既有字串不要改 |
+| `closingIntent` | 情境收尾意圖（模型專用） | **英文**，只餵給判斷的 `closing`；不顯示在任何 UI |
 | `tint` | `[淺色, 深色]` emoji 方塊底色 | 低飽和暖／冷灰調，用法見 [DESIGN.md §2](DESIGN.md) |
 
 ### 同檔案的其他匯出
 
 | 匯出 | 用途 |
 |---|---|
+| `MAX_USER_TURNS` | 學習者則數上限（值必須是 `12`），給 chat route 的 incomplete wrap-up |
 | `LEVELS` | 難度清單（`id` / `label` 中文 / `en` 英文），供篩選器與 badge 使用 |
 | `ROLE_TYPES` | 角色類型清單（`staff`/`friend`/`boss` 與中文標籤） |
 | `SCENE_CATALOG` / `CHARACTER_CATALOG` / `scenarios` | seed 進 DB 的目錄（dev 用；正式對應 `migrations/0002_seed.sql`） |
@@ -94,6 +97,8 @@ type ScenarioCatalog = Scenario & {
 - **AI 扮演**：Bluebird Coffee 的咖啡師
 - **Focus**：`Polite requests` · `Sizes & options` · `Small talk`
 - **Opening**：`Hi there! Welcome to Bluebird Coffee. What can I get started for you today?`
+- **End goal**：`The scene goal is met when the learner has ordered a drink and you have confirmed the size and options or given the price.`
+- **Closing intent**：`The order is settled and either person shows the interaction is finished, such as thanking, saying they will wait or find a seat, saying they are leaving, or wishing each other well. Stating the price or confirming the order alone is not a closing.`
 - **Tint**：`#f3e7d8` / `#3a2f24`（scene: cafe）
 
 #### 🧭 `directions` — Giving Directions／街頭被問路
@@ -103,6 +108,8 @@ type ScenarioCatalog = Scenario & {
 - **AI 扮演**：有點迷路、向學習者問路的觀光客
 - **Focus**：`Giving directions` · `Prepositions of place` · `Landmarks`
 - **Opening**：`Excuse me, sorry to bother you! I'm a bit lost — do you know how to get to the train station from here?`
+- **End goal**：`The scene goal is met when the learner has given a usable route, and you (the asker) have thanked them and are leaving.`
+- **Closing intent**：`The asker shows they understood and are moving on, such as thanking, repeating the route and saying they will go, saying where they are heading next, or saying goodbye.`
 - **Tint**：`#dfeae0` / `#243329`（scene: street）
 
 #### 💬 `small-talk` — Small Talk／派對被搭訕
@@ -112,6 +119,8 @@ type ScenarioCatalog = Scenario & {
 - **AI 扮演**：派對上主動來攀談的賓客 Sam
 - **Focus**：`Openers` · `Follow-up questions` · `Ending politely`
 - **Opening**：`Hey! I don't think we've met — I'm Sam. Mind if I join you? This party is pretty packed, huh?`
+- **End goal**：`The scene goal is met when you have chatted and one of you is ending the conversation politely.`
+- **Closing intent**：`Either person shows the chat is winding down, such as saying they need to go, mentioning something else they have to do, saying it was nice talking, or making a final friendly remark. A short pause or a short reply is not a closing.`
 - **Tint**：`#e6e3f2` / `#2b2937`（scene: party）
 
 ### 中級
@@ -123,6 +132,8 @@ type ScenarioCatalog = Scenario & {
 - **AI 扮演**：The Harbour Hotel 的夜班櫃檯
 - **Focus**：`Confirming details` · `Making requests` · `Complaints`
 - **Opening**：`Good evening, and welcome to The Harbour Hotel. Do you have a reservation with us tonight?`
+- **End goal**：`The scene goal is met when check-in details are done and the guest has a key or a room number.`
+- **Closing intent**：`The check-in is complete and either person shows it is finished, such as acknowledging the key or room number, saying they will go up to the room, thanking, or saying something like enjoy your stay.`
 - **Tint**：`#dee7f0` / `#232c36`（scene: hotel）
 
 #### 🩺 `clinic` — At the Clinic／看診問診
@@ -132,6 +143,8 @@ type ScenarioCatalog = Scenario & {
 - **AI 扮演**：門診醫師
 - **Focus**：`Describing symptoms` · `Duration & frequency` · `Instructions`
 - **Opening**：`Hello, come on in and have a seat. So, what brings you in today?`
+- **End goal**：`The scene goal is met when the learner has described their symptoms and you have given advice or a next step.`
+- **Closing intent**：`The advice is understood and either person shows the visit is finished, such as confirming what to do, saying they will follow the advice, thanking, or the doctor saying to come back if it does not get better and the learner agreeing.`
 - **Tint**：`#f0dfe2` / `#372529`（scene: clinic）
 
 #### 📞 `phone-interview` — Phone Interview／電話面試
@@ -141,6 +154,8 @@ type ScenarioCatalog = Scenario & {
 - **AI 扮演**：進行第一輪電話面試的招募人員
 - **Focus**：`Phone etiquette` · `Self-introduction` · `Asking to repeat`
 - **Opening**：`Hi, thanks for taking my call! Is now still a good time for a quick phone interview?`
+- **End goal**：`The scene goal is met when you (the recruiter) are wrapping up the call or have said you will follow up.`
+- **Closing intent**：`The recruiter starts wrapping up, such as explaining next steps, saying they will follow up, asking if there are any final questions, and the learner has nothing more to add, thanks them, or says goodbye.`
 - **Tint**：`#e9e4d6` / `#332f24`（scene: phone）
 
 ### 進階
@@ -152,6 +167,8 @@ type ScenarioCatalog = Scenario & {
 - **AI 扮演**：當面面試的用人主管
 - **Focus**：`Self-introduction` · `STAR answers` · `Asking back`
 - **Opening**：`Thanks for coming in today. To get us started — could you walk me through your background?`
+- **End goal**：`The scene goal is met when the interview questions are done and either the learner has asked something back or you have said you will be in touch.`
+- **Closing intent**：`The interview moves into its last part, such as final questions from both sides, next steps, saying they will be in touch, thanking each other, or saying there is nothing more to add.`
 - **Tint**：`#e2e6ea` / `#262b2f`（scene: workplace）
 
 #### ⚖️ `debate` — Opinion & Debate／環保辯論
@@ -161,6 +178,8 @@ type ScenarioCatalog = Scenario & {
 - **AI 扮演**：站在相反立場、討論環保議題的對談者
 - **Focus**：`Stating a position` · `Counter-arguments` · `Hedging`
 - **Opening**：`Let's dig into something timely: should single-use plastics be banned outright? Where do you stand?`
+- **End goal**：`The scene goal is met when both sides have made their case and the conversation is wrapping up.`
+- **Closing intent**：`Both sides have made their points and either side wraps up, such as summing up a final point, acknowledging the other side, agreeing to disagree, saying there is nothing more to add, or ending politely. One side going quiet for a moment is not a closing.`
 - **Tint**：`#efe2d3` / `#372c22`（scene: forum）
 
 ---
@@ -177,6 +196,8 @@ type ScenarioCatalog = Scenario & {
 | `level` | — | 難度篩選 + badge | header 副標 | — |
 | `focus` | — | 卡片底部標籤 | 頁面底部標籤 | —（不顯示文字） |
 | `opening` | — | — | **家教的第一則訊息** | **自動唸出的開場白** |
+| `endGoal` | — | — | — | — |
+| `closingIntent` | — | — | — | — |
 | `tint` | — | 圖示方塊底色 | 圖示方塊底色 | 無舞台素材時的底色 |
 
 首頁只取前 4 個情境（`scenarios.slice(0, 4)`）當快捷 chip，**順序即優先序**。
@@ -201,10 +222,10 @@ type ScenarioCatalog = Scenario & {
 ## 6. 新增一個情境
 
 1. 在 [`lib/scenarios.ts`](../lib/scenarios.ts) 的 `scenarios` 陣列**依難度分組的位置**插入新物件（目前排序是 初級 → 中級 → 進階）。必要時先在 `SCENE_CATALOG` / `CHARACTER_CATALOG` 加場景與人物。
-2. 依第 1 節的撰寫規則填滿欄位（含 `sceneId` / `roleType` / `characterId`）。
+2. 依第 1 節的撰寫規則填滿欄位（含 `sceneId` / `roleType` / `characterId` / `endGoal` / `closingIntent`）。
 3. `tint` 挑一組還沒被用過的低飽和色，淺色亮度約 90%、深色約 20%（寫在對應的 scene 上）。
-4. **同步 `migrations/0002_seed.sql`**（正式 D1 的 seed 來源）——加一筆對應的 `INSERT ... ON CONFLICT`；若改了 schema 另開一支新的 migration。
-5. 回來更新這份文件的第 3 節總表與第 4 節細節。
+4. **同步 `migrations/0002_seed.sql`**（正式 D1 的 seed 來源）——加一筆對應的 `INSERT ... ON CONFLICT`；若改了 schema 另開一支新的 migration。既有庫的 `end_goal` 走 `0007_scenario_end_goal.sql`（`ALTER` + `UPDATE`），`closing_intent` 走 `0008_scenario_closing_intent.sql`，不要改寫 `0001` / `0002` / `0007`。
+5. 回來更新這份文件的第 3 節總表與第 4 節細節（含 **End goal** 與 **Closing intent**）。
 6. 同步 `migrations/0002_seed.sql` 後跑 `wrangler d1 migrations apply fluently_db --local`（正式再 `--remote`）。跑 `npm run build`。
 
 檢查清單：
@@ -213,6 +234,8 @@ type ScenarioCatalog = Scenario & {
 - [ ] `blurb` 是「你會遇到什麼」，25–40 字
 - [ ] `focus` 是 3 個英文能力項，不是單字
 - [ ] `opening` 已經在角色裡，且以問句收尾
+- [ ] `endGoal` 是英文任務方向，只給模型、不進 UI；與 `0007` / seed 字串一致（不要改既有八句）
+- [ ] `closingIntent` 是英文收尾意圖，只給判斷、不進 UI；與 `0008` / seed 字串一致
 - [ ] 難度分佈仍大致平衡
 - [ ] 本文件第 3、4 節已同步更新
 
@@ -220,15 +243,19 @@ type ScenarioCatalog = Scenario & {
 
 ## 7. 情境如何餵給 AI
 
-`buildSystemInstruction()`（[`lib/gemini.ts`](../lib/gemini.ts)）用到五個欄位：
+角色扮演走 `buildSystemInstruction()`；結束判斷走另一次 `judgeClosing()`（都在 [`lib/gemini.ts`](../lib/gemini.ts)）。判斷在 `generateReply` **之前**，開場白不跑判斷。
 
-| 欄位 | 在 system instruction 裡的作用 |
+| 欄位 | 在哪裡、做什麼 |
 |---|---|
-| `persona` | `In this session you play {persona}.` |
-| `title` + `blurb` | 場景描述 |
-| `level` | 挑對應的語言複雜度指示（A2／B1-B2／B2-C1） |
-| `focus` | `Steer the conversation so the learner naturally practises: …` |
-| `opening` | session 建立時寫入資料庫的第一則 `model` 訊息 |
+| `persona` | 角色扮演：`In this session you play {persona}.` |
+| `title` + `blurb` | 角色扮演：場景描述 |
+| `level` | 角色扮演：語言複雜度指示（A2／B1-B2／B2-C1） |
+| `focus` | 角色扮演：`Steer the conversation so the learner naturally practises: …` |
+| `endGoal` | 角色扮演：`End goal: {endGoal}`（只當任務方向，不輸出 `ended`）。判斷：只用來設 `goal_met` |
+| `closingIntent` | **不進**角色扮演 prompt。判斷：只用來設 `closing` |
+| `opening` | session 建立時寫入資料庫的第一則 `model` 訊息；**不**跑 `judgeClosing` |
+
+回覆形狀由 route 的 `closingTurn` 決定（不是模型再判斷一次）：一般回合 1–3 句加一問；收尾回合 1–3 句不問。伺服器把 `goal_met` / `closing` 與 12 則上限對成 `wrapUp`。
 
 `id` 現在是 `sessions.scenario_id` 與 `scenarios.id` 的值，
 **更加不可以更動**——改了會讓既有的用量紀錄對不上情境。

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { SceneStage } from "@/components/scene-stage";
@@ -11,6 +11,7 @@ import { stopSpeaking } from "@/lib/speech";
 import { useHoldMic } from "@/lib/use-hold-mic";
 import {
   type ChatTurn,
+  type ConversationReview,
   type Stats,
   useConversation,
 } from "@/lib/use-conversation";
@@ -34,27 +35,37 @@ export function LiveRoom({
   initialTurns,
   initialSessionId,
   initialStats,
+  initialReview = null,
 }: {
   scenario: Scenario;
   initialTurns: ChatTurn[];
   initialSessionId: string | null;
   initialStats: Stats;
+  initialReview?: ConversationReview | null;
 }) {
   const router = useRouter();
   const [paused, setPaused] = useState(false);
+  const closeMicRef = useRef<() => void>(() => {});
 
   const conversation = useConversation({
     scenario,
     initialTurns,
     initialSessionId,
     initialStats,
+    initialReview,
     mode: "live",
     forceSpeak: true,
+    onReviewBegin: () => {
+      setPaused(true);
+      closeMicRef.current();
+    },
+    onReviewReady: (id) => {
+      router.push(`/chat/${scenario.id}?session=${id}&mode=script`);
+    },
   });
 
   const {
     turns,
-    sessionId,
     stats,
     pending,
     error,
@@ -65,8 +76,9 @@ export function LiveRoom({
     needsGesture,
     send,
     replayLast,
-    requestReview,
     reviewPending,
+    stopPlayback,
+    endConversation,
   } = conversation;
 
   const tutorBusy = pending || speakState !== "idle";
@@ -75,6 +87,10 @@ export function LiveRoom({
     onSend: (text) => void send(text),
     setError,
   });
+
+  useEffect(() => {
+    closeMicRef.current = close;
+  }, [close]);
 
   // Never keep the mic open while the tutor is audible or thinking: it
   // would record the tutor's own voice and answer itself.
@@ -95,27 +111,17 @@ export function LiveRoom({
       const next = !current;
       if (next) {
         close();
-        stopSpeaking();
+        stopPlayback();
       }
       return next;
     });
-  }, [close]);
+  }, [close, stopPlayback]);
 
   const finish = useCallback(async () => {
     setPaused(true);
     close();
-    stopSpeaking();
-
-    if (!sessionId || !turns.some((t) => t.role === "user")) {
-      setError("至少說一句再結束，才有辦法給回饋。");
-      return;
-    }
-
-    const result = await requestReview(sessionId);
-    if (result) {
-      router.push(`/chat/${scenario.id}?session=${sessionId}&mode=script`);
-    }
-  }, [close, requestReview, router, scenario.id, sessionId, setError, turns]);
+    await endConversation();
+  }, [close, endConversation]);
 
   // Opening line is the "customer just walked in" beat — keep the waving
   // still on screen while she greets, instead of swapping to the talking pose.

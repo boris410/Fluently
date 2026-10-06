@@ -12,9 +12,9 @@ import {
   getSessionStats,
   sessionExists,
 } from "@/lib/db";
-import { parseSessionReview, type SessionReview } from "@/lib/gemini";
+import { parseSessionReview } from "@/lib/gemini";
 import { LEVELS } from "@/lib/scenarios";
-import type { ChatTurn } from "@/lib/use-conversation";
+import type { ChatTurn, ConversationReview } from "@/lib/use-conversation";
 
 export const dynamic = "force-dynamic";
 
@@ -67,13 +67,24 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
       })()
     : { calls: 0, promptTokens: 0, outputTokens: 0, totalTokens: 0 };
 
-  let initialReview: SessionReview | null = null;
+  let initialReview: ConversationReview | null = null;
   if (resumeId) {
     const stored = await getSessionReview(resumeId, user.id);
     if (stored) {
       try {
         const parsed: unknown = JSON.parse(stored.payload);
-        initialReview = parseSessionReview(parsed);
+        const review = parseSessionReview(parsed);
+        if (review) {
+          initialReview = {
+            ...review,
+            outcome:
+              stored.outcome === "completed" ||
+              stored.outcome === "incomplete" ||
+              stored.outcome === "manual"
+                ? stored.outcome
+                : "manual",
+          };
+        }
       } catch {
         initialReview = null;
       }
@@ -128,6 +139,7 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
           initialTurns={turns}
           initialSessionId={resumeId}
           initialStats={stats}
+          initialReview={initialReview}
         />
       )}
 

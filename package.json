@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "node --experimental-strip-types --experimental-detect-module --test scripts/check-scenario-catalog.ts",
     "preview": "npx opennextjs-cloudflare build && npx opennextjs-cloudflare preview",
     "deploy": "npx opennextjs-cloudflare build && npx opennextjs-cloudflare deploy"
   },

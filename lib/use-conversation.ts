@@ -11,11 +11,17 @@ import {
   apiHeaders,
   getApiKey,
   getAutoSpeak,
+  getVoiceSource,
   subscribeSettings,
 } from "@/lib/settings";
 import { parseSessionReview, type SessionReview } from "@/lib/gemini";
 import type { Scenario } from "@/lib/scenarios";
-import { type SpeakState, speakReply, stopSpeaking } from "@/lib/speech";
+import {
+  type SpeakState,
+  canSpeak,
+  speakReply,
+  stopSpeaking,
+} from "@/lib/speech";
 
 /**
  * Everything a conversation needs, minus the presentation: sending turns,
@@ -39,6 +45,33 @@ export type Stats = {
   totalTokens: number;
 };
 
+export type ReviewOutcome = "completed" | "incomplete" | "manual";
+export type WrapUpOutcome = "completed" | "incomplete";
+
+/** Canonical review JSON plus the UI-only outcome from API / RSC. */
+export type ConversationReview = SessionReview & {
+  outcome: ReviewOutcome;
+};
+
+export function parseReviewOutcome(value: unknown): ReviewOutcome {
+  if (value === "completed" || value === "incomplete" || value === "manual") {
+    return value;
+  }
+  return "manual";
+}
+
+/** Wrap-up only when `wrapUp` is an object with a valid completed/incomplete outcome. */
+export function parseWrapUp(
+  value: unknown,
+): { outcome: WrapUpOutcome } | null {
+  if (!value || typeof value !== "object") return null;
+  const outcome = (value as { outcome?: unknown }).outcome;
+  if (outcome === "completed" || outcome === "incomplete") {
+    return { outcome };
+  }
+  return null;
+}
+
 export function useConversation({
   scenario,
   initialTurns,
@@ -48,12 +81,14 @@ export function useConversation({
   mode,
   forceSpeak = false,
   onSpeechFinished,
+  onReviewBegin,
+  onReviewReady,
 }: {
   scenario: Scenario;
   initialTurns: ChatTurn[];
   initialSessionId: string | null;
   initialStats: Stats;
-  initialReview?: SessionReview | null;
+  initialReview?: ConversationReview | null;
   mode?: "script" | "live";
   /**
    * Speak regardless of the "auto read replies" preference. Live mode
@@ -65,11 +100,15 @@ export function useConversation({
    * playback was stopped.
    */
   onSpeechFinished?: () => void;
+  /** Live: pause and close the mic when a review POST is claimed. */
+  onReviewBegin?: () => void;
+  /** Live: redirect to the script transcript after a successful review. */
+  onReviewReady?: (sessionId: string, review: ConversationReview) => void;
 }) {
   const [turns, setTurns] = useState<ChatTurn[]>(initialTurns);
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId);
   const [stats, setStats] = useState<Stats>(initialStats);
-  const [review, setReview] = useState<SessionReview | null>(initialReview);
+  const [review, setReview] = useState<ConversationReview | null>(initialReview);
   const [reviewPending, setReviewPending] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +146,16 @@ export function useConversation({
 
   const greeted = useRef(false);
   const sessionIdRef = useRef(initialSessionId);
+  const turnsRef = useRef(initialTurns);
+  const reviewRef = useRef(initialReview);
+  const reviewClaimedRef = useRef(false);
+  const reviewPendingRef = useRef(false);
+  const pendingWrapUpOutcomeRef = useRef<WrapUpOutcome | null>(null);
+  const autoReviewWaitRef = useRef<{
+    turnId: string;
+    sessionId: string;
+  } | null>(null);
+  const playbackStartedIdRef = useRef<string | null>(null);
   const openingSessionRef = useRef<{
     promise: Promise<string | null>;
     resolve: (id: string | null) => void;
@@ -115,11 +164,25 @@ export function useConversation({
   // Kept in a ref so `play` stays stable even when the callback changes.
   // Synced in an effect because refs must not be written during render.
   const finishedRef = useRef(onSpeechFinished);
+  const onReviewBeginRef = useRef(onReviewBegin);
+  const onReviewReadyRef = useRef(onReviewReady);
+  const fireEndedReviewRef = useRef<(id: string) => void>(() => {});
+  const scheduleEndedReviewRef = useRef<
+    (turn: ChatTurn, id: string | null) => void
+  >(() => {});
   useEffect(() => {
     finishedRef.current = onSpeechFinished;
-  }, [onSpeechFinished]);
+    onReviewBeginRef.current = onReviewBegin;
+    onReviewReadyRef.current = onReviewReady;
+  }, [onReviewBegin, onReviewReady, onSpeechFinished]);
 
-  useEffect(() => () => stopSpeaking(), []);
+  useEffect(
+    () => () => {
+      autoReviewWaitRef.current = null;
+      stopSpeaking();
+    },
+    [],
+  );
 
   const rememberSession = useCallback((id: string) => {
     if (!sessionIdRef.current) sessionIdRef.current = id;
@@ -140,6 +203,7 @@ export function useConversation({
   const play = useCallback(
     (turn: ChatTurn, sessionOverride?: string | null) => {
       const booked = sessionOverride ?? sessionIdRef.current;
+      playbackStartedIdRef.current = null;
       return speakReply(turn.text, {
         scenarioId: scenario.id,
         sessionId: booked,
@@ -150,13 +214,28 @@ export function useConversation({
           if (state !== "idle") {
             setNeedsGesture(false);
             setVoiceNotice(null);
+            if (state === "playing") playbackStartedIdRef.current = turn.id;
           } else {
+            const waiting = autoReviewWaitRef.current;
+            if (
+              waiting &&
+              waiting.turnId === turn.id &&
+              playbackStartedIdRef.current === turn.id
+            ) {
+              fireEndedReviewRef.current(waiting.sessionId);
+            }
             finishedRef.current?.();
           }
         },
         onFallback: (reason) =>
           setVoiceNotice(`角色語音沒出來，已改用瀏覽器語音。（${reason}）`),
-        onBlocked: () => setNeedsGesture(true),
+        onBlocked: () => {
+          setNeedsGesture(true);
+          const waiting = autoReviewWaitRef.current;
+          if (waiting && waiting.turnId === turn.id) {
+            fireEndedReviewRef.current(waiting.sessionId);
+          }
+        },
         onSession: (id) => {
           rememberSession(id);
           settleOpeningSession(id);
@@ -177,9 +256,11 @@ export function useConversation({
   );
 
   const stopPlayback = useCallback(() => {
+    const waiting = autoReviewWaitRef.current;
     stopSpeaking();
     setSpeakingId(null);
     setSpeakState("idle");
+    if (waiting) fireEndedReviewRef.current(waiting.sessionId);
   }, []);
 
   // New rooms always greet out loud — that TTS call is what mints the
@@ -204,10 +285,14 @@ export function useConversation({
       if (!trimmed || pending) return;
 
       setError(null);
-      setTurns((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: "user", text: trimmed },
-      ]);
+      setTurns((prev) => {
+        const next = [
+          ...prev,
+          { id: crypto.randomUUID(), role: "user" as const, text: trimmed },
+        ];
+        turnsRef.current = next;
+        return next;
+      });
       setPending(true);
 
       try {
@@ -215,6 +300,10 @@ export function useConversation({
         if (!id && openingSessionRef.current) {
           id = await openingSessionRef.current.promise;
         }
+        // Cancel the previous wrap-up wait before stopSpeaking so a
+        // browser-voice onend does not POST review and then send.
+        autoReviewWaitRef.current = null;
+        pendingWrapUpOutcomeRef.current = null;
         stopSpeaking();
 
         const res = await fetch("/api/chat", {
@@ -245,14 +334,32 @@ export function useConversation({
           usage: data.usage,
           latencyMs: data.latencyMs,
         };
-        setTurns((prev) => [...prev, replyTurn]);
+        setTurns((prev) => {
+          const next = [...prev, replyTurn];
+          turnsRef.current = next;
+          return next;
+        });
         setStats((prev) => ({
           calls: prev.calls + 1,
           promptTokens: prev.promptTokens + (data.usage?.promptTokens ?? 0),
           outputTokens: prev.outputTokens + (data.usage?.outputTokens ?? 0),
           totalTokens: prev.totalTokens + (data.usage?.totalTokens ?? 0),
         }));
-        if (forceSpeak || getAutoSpeak()) play(replyTurn, data.sessionId);
+
+        const booked = typeof data.sessionId === "string" ? data.sessionId : null;
+        const wrapUp = parseWrapUp(data.wrapUp);
+        if (wrapUp && replyTurn.text) {
+          pendingWrapUpOutcomeRef.current = wrapUp.outcome;
+          scheduleEndedReviewRef.current(
+            replyTurn,
+            booked ?? sessionIdRef.current,
+          );
+        } else {
+          pendingWrapUpOutcomeRef.current = null;
+          if (forceSpeak || getAutoSpeak()) {
+            play(replyTurn, booked);
+          }
+        }
       } catch {
         setError("連線失敗，請確認 dev server 還在跑。");
       } finally {
@@ -262,38 +369,138 @@ export function useConversation({
     [forceSpeak, mode, pending, play, rememberSession, scenario.id],
   );
 
-  const requestReview = useCallback(async (id: string) => {
-    setError(null);
-    setReviewPending(true);
-    try {
-      const res = await fetch("/api/review", {
-        method: "POST",
-        headers: apiHeaders(),
-        body: JSON.stringify({ sessionId: id }),
-      });
-      const data = await res.json();
+  const requestReview = useCallback(
+    async (id: string, outcome: ReviewOutcome) => {
+      setError(null);
+      reviewPendingRef.current = true;
+      setReviewPending(true);
+      try {
+        const res = await fetch("/api/review", {
+          method: "POST",
+          headers: apiHeaders(),
+          body: JSON.stringify({ sessionId: id, outcome }),
+        });
+        const data = await res.json();
 
-      if (!res.ok) {
-        setError(data.error ?? `發生錯誤（${res.status}）`);
-        if (res.status === 401) setRejectedKey(true);
-        return null;
-      }
+        if (!res.ok) {
+          setError(data.error ?? `發生錯誤（${res.status}）`);
+          if (res.status === 401) setRejectedKey(true);
+          return null;
+        }
 
-      setRejectedKey(false);
-      const next = parseSessionReview(data.review);
-      if (!next) {
-        setError("回饋沒有產生，請再試一次。");
+        setRejectedKey(false);
+        const next = parseSessionReview(data.review);
+        if (!next) {
+          setError("回饋沒有產生，請再試一次。");
+          return null;
+        }
+        const withOutcome: ConversationReview = {
+          ...next,
+          outcome: parseReviewOutcome(data.outcome),
+        };
+        reviewRef.current = withOutcome;
+        setReview(withOutcome);
+        return withOutcome;
+      } catch {
+        setError("連線失敗，請確認 dev server 還在跑。");
         return null;
+      } finally {
+        reviewPendingRef.current = false;
+        setReviewPending(false);
       }
-      setReview(next);
-      return next;
-    } catch {
-      setError("連線失敗，請確認 dev server 還在跑。");
-      return null;
-    } finally {
-      setReviewPending(false);
-    }
+    },
+    [],
+  );
+
+  const resolveReviewOutcome = useCallback((): ReviewOutcome => {
+    return pendingWrapUpOutcomeRef.current ?? "manual";
   }, []);
+
+  const claimAndRequestReview = useCallback(
+    async (id: string, outcome: ReviewOutcome) => {
+      if (reviewRef.current) {
+        onReviewBeginRef.current?.();
+        onReviewReadyRef.current?.(id, reviewRef.current);
+        return reviewRef.current;
+      }
+      if (reviewClaimedRef.current) return null;
+      reviewClaimedRef.current = true;
+      onReviewBeginRef.current?.();
+      const result = await requestReview(id, outcome);
+      if (result) {
+        onReviewReadyRef.current?.(id, result);
+      } else {
+        reviewClaimedRef.current = false;
+      }
+      return result;
+    },
+    [requestReview],
+  );
+
+  const fireEndedReview = useCallback(
+    (id: string) => {
+      autoReviewWaitRef.current = null;
+      if (!id) return;
+      if (!turnsRef.current.some((t) => t.role === "user")) {
+        setError("至少說一句再結束，才有辦法給回饋。");
+        return;
+      }
+      void claimAndRequestReview(id, resolveReviewOutcome());
+    },
+    [claimAndRequestReview, resolveReviewOutcome],
+  );
+
+  const scheduleEndedReview = useCallback(
+    (turn: ChatTurn, id: string | null) => {
+      if (!id) return;
+      if (
+        reviewClaimedRef.current &&
+        !reviewPendingRef.current &&
+        !reviewRef.current
+      ) {
+        reviewClaimedRef.current = false;
+      }
+      if (reviewClaimedRef.current && reviewPendingRef.current) {
+        if (forceSpeak || getAutoSpeak()) play(turn, id);
+        return;
+      }
+      if (!turnsRef.current.some((t) => t.role === "user")) {
+        setError("至少說一句再結束，才有辦法給回饋。");
+        return;
+      }
+
+      const wantSpeak = forceSpeak || getAutoSpeak();
+      const canAttempt =
+        wantSpeak && !(getVoiceSource() === "browser" && !canSpeak());
+      if (!canAttempt) {
+        fireEndedReview(id);
+        return;
+      }
+
+      autoReviewWaitRef.current = { turnId: turn.id, sessionId: id };
+      void play(turn, id);
+    },
+    [fireEndedReview, forceSpeak, play],
+  );
+
+  useEffect(() => {
+    fireEndedReviewRef.current = fireEndedReview;
+    scheduleEndedReviewRef.current = scheduleEndedReview;
+  }, [fireEndedReview, scheduleEndedReview]);
+
+  const endConversation = useCallback(async () => {
+    autoReviewWaitRef.current = null;
+    stopSpeaking();
+    setSpeakingId(null);
+    setSpeakState("idle");
+
+    const id = sessionIdRef.current;
+    if (!id || !turnsRef.current.some((t) => t.role === "user")) {
+      setError("至少說一句再結束，才有辦法給回饋。");
+      return null;
+    }
+    return claimAndRequestReview(id, resolveReviewOutcome());
+  }, [claimAndRequestReview, resolveReviewOutcome]);
 
   /** Replays the most recent tutor line — used by the unlock prompt. */
   const replayLast = useCallback(() => {
@@ -319,6 +526,6 @@ export function useConversation({
     play,
     stopPlayback,
     replayLast,
-    requestReview,
+    endConversation,
   };
 }

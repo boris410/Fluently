@@ -1,15 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import Link from "next/link";
 import { Mark } from "@/components/logo";
 import { TalkMic } from "@/components/talk-mic";
-import type { SessionReview } from "@/lib/gemini";
 import type { Scenario } from "@/lib/scenarios";
 import { type SpeakState, canSpeak } from "@/lib/speech";
 import { useHoldMic } from "@/lib/use-hold-mic";
 import {
   type ChatTurn,
+  type ConversationReview,
+  type ReviewOutcome,
   type Stats,
   useConversation,
 } from "@/lib/use-conversation";
@@ -31,11 +32,10 @@ export function ChatRoom({
   initialTurns: ChatTurn[];
   initialSessionId: string | null;
   initialStats: Stats;
-  initialReview?: SessionReview | null;
+  initialReview?: ConversationReview | null;
 }) {
   const {
     turns,
-    sessionId,
     stats,
     pending,
     review,
@@ -51,7 +51,7 @@ export function ChatRoom({
     play,
     stopPlayback,
     replayLast,
-    requestReview,
+    endConversation,
   } = useConversation({
     scenario,
     initialTurns,
@@ -78,14 +78,6 @@ export function ChatRoom({
     if (!listening) stopPlayback();
     toggle();
   };
-
-  const endConversation = useCallback(async () => {
-    if (!sessionId || !turns.some((t) => t.role === "user")) {
-      setError("至少說一句再結束，才有辦法給回饋。");
-      return;
-    }
-    await requestReview(sessionId);
-  }, [requestReview, sessionId, setError, turns]);
 
   return (
     <div className="flex flex-1 flex-col">
@@ -211,13 +203,28 @@ export function ChatRoom({
   );
 }
 
-function PracticeReview({ review }: { review: SessionReview }) {
+const REVIEW_COPY: Record<ReviewOutcome, { title: string; blurb: string }> = {
+  completed: {
+    title: "你完成了這個情境",
+    blurb: "場面已經走完。下面是這次練習的建議、單字、文法與句子。",
+  },
+  incomplete: {
+    title: "這次練習先停在這裡",
+    blurb: "對話已經收尾，但情境目標還沒完全達成。下面仍是這次練習的回饋。",
+  },
+  manual: {
+    title: "這次練習的回饋",
+    blurb:
+      "根據你剛才說的內容整理。家教在對話裡不會出戲糾正；這份是另外產出的回顧。",
+  },
+};
+
+function PracticeReview({ review }: { review: ConversationReview }) {
+  const copy = REVIEW_COPY[review.outcome] ?? REVIEW_COPY.manual;
   return (
     <div className="rise rounded-2xl border border-line bg-surface p-5">
-      <h2 className="font-display text-[28px] sm:text-[32px]">這次練習的回饋</h2>
-      <p className="mt-2 text-[14px] leading-7 text-ink-soft">
-        根據你剛才說的內容整理。家教在對話裡不會出戲糾正；這份是另外產出的回顧。
-      </p>
+      <h2 className="font-display text-[28px] sm:text-[32px]">{copy.title}</h2>
+      <p className="mt-2 text-[14px] leading-7 text-ink-soft">{copy.blurb}</p>
 
       <ReviewSection title="建議" empty={review.advice.length === 0}>
         {review.advice.map((item, i) => (

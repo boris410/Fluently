@@ -180,7 +180,7 @@ export default async function UsagePage() {
                   各情境用量
                 </h2>
                 <p className="mt-1.5 text-[13px] text-ink-muted">
-                  只計對話呼叫，不含語音合成與談話回饋。
+                  只計對話呼叫，不含語音合成、談話回饋與結束判斷。
                 </p>
                 <div className="mt-4 overflow-x-auto rounded-2xl border border-line">
                   <table className="w-full min-w-[560px] border-collapse text-[14px]">

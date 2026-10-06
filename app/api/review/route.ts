@@ -17,6 +17,8 @@ import {
   GeminiError,
   generateReview,
   parseSessionReview,
+  REVIEW_OUTCOMES,
+  type ReviewOutcome,
 } from "@/lib/gemini";
 
 const REVIEW_FAIL = "回饋沒有產生，請再試一次。";
@@ -36,12 +38,19 @@ function isUniqueConflict(error: unknown): boolean {
   return parts.some((p) => /UNIQUE constraint failed/i.test(p));
 }
 
+function isReviewOutcome(value: unknown): value is ReviewOutcome {
+  return (
+    typeof value === "string" &&
+    (REVIEW_OUTCOMES as readonly string[]).includes(value)
+  );
+}
+
 async function readValidCachedReview(sessionId: string, userId: string) {
   const existing = await getSessionReview(sessionId, userId);
   if (!existing) return null;
   const review = parseSessionReview(existing.payload);
   if (!review) return null;
-  return { review, model: existing.model };
+  return { review, model: existing.model, outcome: existing.outcome };
 }
 
 /**
@@ -62,7 +71,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { sessionId?: unknown };
+  let body: { sessionId?: unknown; outcome?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -104,10 +113,17 @@ export async function POST(request: Request) {
         review: existing.review,
         sessionId,
         model: existing.model,
+        outcome: existing.outcome,
       },
       { status: 200 },
     );
   }
+
+  if (!isReviewOutcome(body.outcome)) {
+    return Response.json({ error: "結束方式無效" }, { status: 400 });
+  }
+  const outcome = body.outcome;
+
   await deleteSessionReview(sessionId, user.id);
 
   const model = process.env.GEMINI_MODEL?.trim() || DEFAULT_MODEL;
@@ -162,6 +178,7 @@ export async function POST(request: Request) {
         userId: user.id,
         payload,
         model,
+        outcome,
       });
     } catch (error) {
       if (!isUniqueConflict(error)) throw error;
@@ -175,6 +192,7 @@ export async function POST(request: Request) {
             review: cachedHit.review,
             sessionId,
             model: cachedHit.model,
+            outcome: cachedHit.outcome,
           },
           { status: 200 },
         );
@@ -187,6 +205,7 @@ export async function POST(request: Request) {
           userId: user.id,
           payload,
           model,
+          outcome,
         });
       } catch (retryError) {
         if (!isUniqueConflict(retryError)) throw retryError;
@@ -199,6 +218,7 @@ export async function POST(request: Request) {
             review: raced.review,
             sessionId,
             model: raced.model,
+            outcome: raced.outcome,
           },
           { status: 200 },
         );
@@ -215,6 +235,7 @@ export async function POST(request: Request) {
         usage: result.usage,
         latencyMs: result.latencyMs,
         model,
+        outcome,
       },
       { status: 201 },
     );

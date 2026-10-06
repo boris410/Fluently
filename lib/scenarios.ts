@@ -24,9 +24,16 @@ export type Scenario = {
   focus: string[];
   /** The tutor's opening line once a session starts. */
   opening: string;
+  /** English end-intent for the model only; not shown on UI. */
+  endGoal: string;
+  /** English closing-intent for the judge only; not shown on UI. */
+  closingIntent: string;
   /** Card wash colour, light / dark. */
   tint: [string, string];
 };
+
+/** User-turn cap for auto incomplete wrap-up. Opening model line does not count. */
+export const MAX_USER_TURNS = 12;
 
 /** Seed ids — stable, used as D1 primary keys. */
 /** Row id of the single seeded ElevenLabs voice (Bella). */
@@ -87,6 +94,10 @@ export const scenarios: ScenarioCatalog[] = [
     focus: ["Polite requests", "Sizes & options", "Small talk"],
     opening:
       "Hi there! Welcome to Bluebird Coffee. What can I get started for you today?",
+    endGoal:
+      "The scene goal is met when the learner has ordered a drink and you have confirmed the size and options or given the price.",
+    closingIntent:
+      "The order is settled and either person shows the interaction is finished, such as thanking, saying they will wait or find a seat, saying they are leaving, or wishing each other well. Stating the price or confirming the order alone is not a closing.",
     tint: ["#f3e7d8", "#3a2f24"],
   },
   {
@@ -104,6 +115,10 @@ export const scenarios: ScenarioCatalog[] = [
     focus: ["Giving directions", "Prepositions of place", "Landmarks"],
     opening:
       "Excuse me, sorry to bother you! I'm a bit lost — do you know how to get to the train station from here?",
+    endGoal:
+      "The scene goal is met when the learner has given a usable route, and you (the asker) have thanked them and are leaving.",
+    closingIntent:
+      "The asker shows they understood and are moving on, such as thanking, repeating the route and saying they will go, saying where they are heading next, or saying goodbye.",
     tint: ["#dfeae0", "#243329"],
   },
   {
@@ -121,6 +136,10 @@ export const scenarios: ScenarioCatalog[] = [
     focus: ["Openers", "Follow-up questions", "Ending politely"],
     opening:
       "Hey! I don't think we've met — I'm Sam. Mind if I join you? This party is pretty packed, huh?",
+    endGoal:
+      "The scene goal is met when you have chatted and one of you is ending the conversation politely.",
+    closingIntent:
+      "Either person shows the chat is winding down, such as saying they need to go, mentioning something else they have to do, saying it was nice talking, or making a final friendly remark. A short pause or a short reply is not a closing.",
     tint: ["#e6e3f2", "#2b2937"],
   },
   {
@@ -137,6 +156,10 @@ export const scenarios: ScenarioCatalog[] = [
     focus: ["Confirming details", "Making requests", "Complaints"],
     opening:
       "Good evening, and welcome to The Harbour Hotel. Do you have a reservation with us tonight?",
+    endGoal:
+      "The scene goal is met when check-in details are done and the guest has a key or a room number.",
+    closingIntent:
+      "The check-in is complete and either person shows it is finished, such as acknowledging the key or room number, saying they will go up to the room, thanking, or saying something like enjoy your stay.",
     tint: ["#dee7f0", "#232c36"],
   },
   {
@@ -152,6 +175,10 @@ export const scenarios: ScenarioCatalog[] = [
     persona: "a general practitioner seeing a patient at a walk-in clinic",
     focus: ["Describing symptoms", "Duration & frequency", "Instructions"],
     opening: "Hello, come on in and have a seat. So, what brings you in today?",
+    endGoal:
+      "The scene goal is met when the learner has described their symptoms and you have given advice or a next step.",
+    closingIntent:
+      "The advice is understood and either person shows the visit is finished, such as confirming what to do, saying they will follow the advice, thanking, or the doctor saying to come back if it does not get better and the learner agreeing.",
     tint: ["#f0dfe2", "#372529"],
   },
   {
@@ -168,6 +195,10 @@ export const scenarios: ScenarioCatalog[] = [
     focus: ["Phone etiquette", "Self-introduction", "Asking to repeat"],
     opening:
       "Hi, thanks for taking my call! Is now still a good time for a quick phone interview?",
+    endGoal:
+      "The scene goal is met when you (the recruiter) are wrapping up the call or have said you will follow up.",
+    closingIntent:
+      "The recruiter starts wrapping up, such as explaining next steps, saying they will follow up, asking if there are any final questions, and the learner has nothing more to add, thanks them, or says goodbye.",
     tint: ["#e9e4d6", "#332f24"],
   },
   {
@@ -185,6 +216,10 @@ export const scenarios: ScenarioCatalog[] = [
     focus: ["Self-introduction", "STAR answers", "Asking back"],
     opening:
       "Thanks for coming in today. To get us started — could you walk me through your background?",
+    endGoal:
+      "The scene goal is met when the interview questions are done and either the learner has asked something back or you have said you will be in touch.",
+    closingIntent:
+      "The interview moves into its last part, such as final questions from both sides, next steps, saying they will be in touch, thanking each other, or saying there is nothing more to add.",
     tint: ["#e2e6ea", "#262b2f"],
   },
   {
@@ -202,6 +237,10 @@ export const scenarios: ScenarioCatalog[] = [
     focus: ["Stating a position", "Counter-arguments", "Hedging"],
     opening:
       "Let's dig into something timely: should single-use plastics be banned outright? Where do you stand?",
+    endGoal:
+      "The scene goal is met when both sides have made their case and the conversation is wrapping up.",
+    closingIntent:
+      "Both sides have made their points and either side wraps up, such as summing up a final point, acknowledging the other side, agreeing to disagree, saying there is nothing more to add, or ending politely. One side going quiet for a moment is not a closing.",
     tint: ["#efe2d3", "#372c22"],
   },
 ];

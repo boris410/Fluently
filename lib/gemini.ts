@@ -1,4 +1,4 @@
-import type { Scenario } from "@/lib/scenarios";
+import type { Scenario } from "./scenarios";
 
 /**
  * Minimal Gemini REST client.
@@ -21,7 +21,7 @@ export const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 export type ApiCallRecord = {
   platform: "gemini";
   endpoint: string;
-  operation: "chat" | "tts" | "verify-key" | "review";
+  operation: "chat" | "tts" | "verify-key" | "review" | "judge";
   model: string | null;
   detail: string | null;
   input: string | null;
@@ -289,12 +289,99 @@ const VALID_EMOTIONS: ReplyEmotion[] = [
   "confused",
 ];
 
+export type WrapUpOutcome = "completed" | "incomplete";
+export type ReviewOutcome = WrapUpOutcome | "manual";
+export const REVIEW_OUTCOMES = ["completed", "incomplete", "manual"] as const;
+export type ChatWrapUp = { outcome: WrapUpOutcome } | null;
+
 export type GeminiResult = {
   text: string;
   emotion: ReplyEmotion;
   usage: GeminiUsage;
   latencyMs: number;
 };
+
+export type JudgeFlags = {
+  goal_met: boolean;
+  closing: boolean;
+};
+
+export type JudgeClosingResult = JudgeFlags & {
+  usage: GeminiUsage;
+  latencyMs: number;
+  ok: boolean;
+  error: string | null;
+};
+
+export const JUDGE_WINDOW = 6;
+
+export const SHARED_JUDGE_RULE =
+  "Judge by meaning, not keywords. Nobody must say goodbye. `goal_met` and `closing` are independent booleans. Set `goal_met` from `endGoal` only; do not require someone to be leaving. Set `closing` from `closingIntent` only; someone leaving or finishing the interaction is enough even if the task is not done. Do not set `closing` false just because the task is unfinished. A single thanks, okay, or sure is not a closing if the other person keeps going with a new question or topic. If you are unsure about a flag, set that flag false; do not change the other flag.";
+
+const JUDGE_RESPONSE_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    goal_met: {
+      type: "BOOLEAN",
+      description: "true only when endGoal is met; if unsure, false",
+    },
+    closing: {
+      type: "BOOLEAN",
+      description: "true only when closingIntent is met; if unsure, false",
+    },
+  },
+  required: ["goal_met", "closing"],
+} as const;
+
+export function buildJudgeInstruction(
+  endGoal: string,
+  closingIntent: string,
+): string {
+  return [
+    "You judge whether a practice conversation should wrap up.",
+    `endGoal: ${endGoal}`,
+    `closingIntent: ${closingIntent}`,
+    SHARED_JUDGE_RULE,
+    'Return JSON {"goal_met": boolean, "closing": boolean} only.',
+  ].join("\n");
+}
+
+/** Either field missing or not a boolean → both false and invalid. */
+export function parseJudgeFlags(raw: unknown): JudgeFlags & { valid: boolean } {
+  if (!raw || typeof raw !== "object") {
+    return { goal_met: false, closing: false, valid: false };
+  }
+  const rec = raw as Record<string, unknown>;
+  if (typeof rec.goal_met !== "boolean" || typeof rec.closing !== "boolean") {
+    return { goal_met: false, closing: false, valid: false };
+  }
+  return { goal_met: rec.goal_met, closing: rec.closing, valid: true };
+}
+
+export function sliceJudgeTurns<T>(turns: T[]): T[] {
+  return turns.slice(-JUDGE_WINDOW);
+}
+
+/** Server decision matrix. Both-true wins even at the user-turn cap. */
+export function decideWrapUp(
+  flags: JudgeFlags,
+  userTurns: number,
+  maxUserTurns = 12,
+): { wrapUp: ChatWrapUp; closingTurn: boolean } {
+  if (flags.goal_met && flags.closing) {
+    return { wrapUp: { outcome: "completed" }, closingTurn: true };
+  }
+  if (flags.goal_met && !flags.closing && userTurns < maxUserTurns) {
+    return { wrapUp: null, closingTurn: false };
+  }
+  if (flags.closing && !flags.goal_met) {
+    return { wrapUp: { outcome: "incomplete" }, closingTurn: true };
+  }
+  if (!flags.goal_met && !flags.closing && userTurns < maxUserTurns) {
+    return { wrapUp: null, closingTurn: false };
+  }
+  return { wrapUp: { outcome: "incomplete" }, closingTurn: true };
+}
 
 const LEVEL_GUIDANCE: Record<Scenario["level"], string> = {
   beginner:
@@ -306,15 +393,22 @@ const LEVEL_GUIDANCE: Record<Scenario["level"], string> = {
 };
 
 /** Builds the tutor's system instruction from a scenario definition. */
-export function buildSystemInstruction(scenario: Scenario): string {
+export function buildSystemInstruction(
+  scenario: Scenario,
+  options?: { closingTurn?: boolean },
+): string {
+  const shape = options?.closingTurn
+    ? "- This is the closing turn. Reply with 1-3 sentences of in-character closing. Do not ask a follow-up question. Do not give a score, a summary, or a grammar lesson. Do not mention being an AI or a tutor, and do not say the words \"end goal\" or \"closing intent\"."
+    : "- Reply with 1-3 sentences, then ask one question that keeps the conversation going. Stay in the scene.";
   return [
     `You are an English conversation partner in a speaking-practice app. In this session you play ${scenario.persona}.`,
     `Scene: ${scenario.title}. ${scenario.blurb}`,
     LEVEL_GUIDANCE[scenario.level],
     `Steer the conversation so the learner naturally practises: ${scenario.focus.join(", ")}.`,
+    `End goal: ${scenario.endGoal}`,
     "Rules:",
     "- Stay in character. Never mention that you are an AI, a model, or a language tutor.",
-    "- Reply with 1-3 sentences, then ask one question that keeps the conversation going.",
+    shape,
     "- Reply in English only, even if the learner writes in another language.",
     "- If the learner makes a mistake that would confuse a real listener, model the correct phrasing naturally in your reply instead of correcting them like a teacher.",
     "- Never break the scene to give a grammar lesson, a score, or a summary.",
@@ -470,7 +564,10 @@ export async function generateReply(options: {
   let text = "";
   let emotion: ReplyEmotion = "neutral";
   try {
-    const parsed = JSON.parse(raw) as { reply?: string; emotion?: string };
+    const parsed = JSON.parse(raw) as {
+      reply?: string;
+      emotion?: string;
+    };
     text = parsed.reply?.trim() ?? "";
     const e = parsed.emotion ?? "";
     emotion = VALID_EMOTIONS.includes(e as ReplyEmotion)
@@ -499,6 +596,146 @@ export async function generateReply(options: {
       thoughtTokens: meta.thoughtsTokenCount ?? 0,
       totalTokens: meta.totalTokenCount ?? 0,
     },
+  };
+}
+
+export async function judgeClosing(options: {
+  apiKey: string;
+  model: string;
+  endGoal: string;
+  closingIntent: string;
+  turns: GeminiTurn[];
+  onCall?: ApiCallLogger;
+}): Promise<JudgeClosingResult> {
+  const { apiKey, model, endGoal, closingIntent, onCall } = options;
+  const turns = sliceJudgeTurns(options.turns);
+  const endpoint = `${GEMINI_BASE}/models/${encodeURIComponent(model)}:generateContent`;
+  const systemInstruction = buildJudgeInstruction(endGoal, closingIntent);
+  const input = turns.map((t) => `${t.role}: ${t.text}`).join("\n");
+  const requestedAt = Date.now();
+
+  const fail = (
+    usage: GeminiUsage,
+    latencyMs: number,
+    status: number,
+    error: string,
+    output: string | null,
+  ): JudgeClosingResult => {
+    onCall?.({
+      platform: "gemini",
+      endpoint,
+      operation: "judge",
+      model,
+      detail: null,
+      input,
+      output,
+      inputTokens: usage.promptTokens,
+      outputTokens: usage.outputTokens,
+      totalTokens: usage.totalTokens,
+      status,
+      ok: false,
+      error,
+      requestedAt,
+      returnedAt: requestedAt + latencyMs,
+      durationMs: latencyMs,
+    });
+    return {
+      goal_met: false,
+      closing: false,
+      usage,
+      latencyMs,
+      ok: false,
+      error,
+    };
+  };
+
+  let res: Response;
+  try {
+    res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemInstruction }] },
+        contents: turns.map((t) => ({
+          role: t.role,
+          parts: [{ text: t.text }],
+        })),
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 128,
+          responseMimeType: "application/json",
+          responseSchema: JUDGE_RESPONSE_SCHEMA,
+        },
+      }),
+    });
+  } catch (error) {
+    const latencyMs = Date.now() - requestedAt;
+    const message = error instanceof Error ? error.message : "網路錯誤";
+    return fail(usageFromMeta({}), latencyMs, 0, message, null);
+  }
+
+  const returnedAt = Date.now();
+  const latencyMs = returnedAt - requestedAt;
+  const body = (await res.json().catch(() => null)) as GeminiResponse | null;
+  const usage = usageFromMeta(body?.usageMetadata ?? {});
+
+  if (!res.ok) {
+    const message = body?.error?.message ?? `Gemini 回應 ${res.status}`;
+    return fail(usage, latencyMs, res.status, message, null);
+  }
+
+  const raw =
+    body?.candidates?.[0]?.content?.parts
+      ?.map((p) => p.text ?? "")
+      .join("")
+      .trim() ?? "";
+
+  if (!raw) {
+    const message = `模型沒有產生內容（finishReason: ${body?.candidates?.[0]?.finishReason ?? "unknown"}）`;
+    return fail(usage, latencyMs, res.status, message, null);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return fail(usage, latencyMs, res.status, "結束判斷 JSON 無法解析", raw);
+  }
+
+  const flags = parseJudgeFlags(parsed);
+  if (!flags.valid) {
+    return fail(usage, latencyMs, res.status, "結束判斷欄位無效", raw);
+  }
+
+  onCall?.({
+    platform: "gemini",
+    endpoint,
+    operation: "judge",
+    model,
+    detail: null,
+    input,
+    output: raw,
+    inputTokens: usage.promptTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+    status: res.status,
+    ok: true,
+    error: null,
+    requestedAt,
+    returnedAt,
+    durationMs: latencyMs,
+  });
+
+  return {
+    goal_met: flags.goal_met,
+    closing: flags.closing,
+    usage,
+    latencyMs,
+    ok: true,
+    error: null,
   };
 }
 

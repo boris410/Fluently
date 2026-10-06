@@ -80,9 +80,11 @@ CREATE TABLE IF NOT EXISTS scenarios (
   blurb        TEXT NOT NULL,    -- 一句話描述「你會遇到什麼」
   level        TEXT NOT NULL,    -- beginner / intermediate / advanced
   focus        TEXT NOT NULL,    -- 語言重點，JSON 陣列字串
-  opening      TEXT NOT NULL,    -- 家教開場白（英文）
-  persona      TEXT NOT NULL,    -- 英文人設，餵給 Gemini system instruction
-  sort_order   INTEGER NOT NULL DEFAULT 0 -- 列表排序，數字越小越前
+  opening        TEXT NOT NULL,    -- 家教開場白（英文）
+  persona        TEXT NOT NULL,    -- 英文人設，餵給 Gemini system instruction
+  end_goal       TEXT NOT NULL,    -- 模型專用任務方向（英文）；不顯示在 UI。migration 0007 新增；字串不再改
+  closing_intent TEXT NOT NULL,    -- 模型專用收尾意圖（英文）；不顯示在 UI。migration 0008 新增
+  sort_order     INTEGER NOT NULL DEFAULT 0 -- 列表排序，數字越小越前
 );
 
 -- 一次練習對話
@@ -111,8 +113,9 @@ CREATE TABLE IF NOT EXISTS session_reviews (
   id               TEXT PRIMARY KEY, -- crypto.randomUUID()
   session_id       TEXT NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE, -- 一段練習一筆
   user_student_id  TEXT NOT NULL,    -- = user.id；應用層過濾，不加 FK 到 "user"
-  payload          TEXT NOT NULL,    -- Canonical JSON：advice / vocabulary / grammar / sentences
+  payload          TEXT NOT NULL,    -- Canonical JSON：advice / vocabulary / grammar / sentences（不含 outcome）
   model            TEXT NOT NULL,    -- 寫入這列時用的模型 id
+  outcome          TEXT NOT NULL DEFAULT 'manual', -- completed / incomplete / manual；migration 0009 新增
   created_at       INTEGER NOT NULL  -- epoch ms
 );
 
@@ -120,7 +123,7 @@ CREATE TABLE IF NOT EXISTS session_reviews (
 CREATE TABLE IF NOT EXISTS api_calls (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   session_id     TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, -- 記在哪段練習
-  kind           TEXT NOT NULL DEFAULT 'chat', -- chat 對話 / tts 語音 / review 談話回饋；來回次數只數 chat
+  kind           TEXT NOT NULL DEFAULT 'chat', -- chat 對話 / tts 語音 / review 談話回饋 / judge 結束判斷；來回次數只數 chat
   model          TEXT NOT NULL,    -- 實際呼叫的模型 id
   prompt_tokens  INTEGER NOT NULL DEFAULT 0, -- Gemini promptTokenCount；TTS 常為 0
   output_tokens  INTEGER NOT NULL DEFAULT 0, -- candidatesTokenCount
@@ -137,7 +140,7 @@ CREATE TABLE IF NOT EXISTS api_logs (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
   platform         TEXT NOT NULL,    -- gemini / elevenlabs
   endpoint         TEXT NOT NULL,    -- 完整 URL，不含 API key
-  operation        TEXT NOT NULL,    -- chat / tts / verify-key / review
+  operation        TEXT NOT NULL,    -- chat / tts / verify-key / review / judge
   model            TEXT,             -- 模型；verify-key 為 NULL
   detail           TEXT,             -- 額外參數，例如 voice=Kore
   session_id       TEXT,             -- 關聯練習，刻意不加外鍵
@@ -272,6 +275,9 @@ wrangler d1 migrations apply fluently_db --remote  # 正式
 | `0004_user_link.sql` | 刪掉還存在的 seed `default` 學習者（沒有 sessions 才刪） |
 | `0005_agent_loop.sql` | `agent_runs` / `agent_turns`（Cursor 角色迴圈看板；不碰 Gemini 用量） |
 | `0006_session_reviews.sql` | `session_reviews`（一段練習一筆談話回饋）。`api_calls.kind` 可為 `review`；**不**重建 `api_calls` |
+| `0007_scenario_end_goal.sql` | `scenarios.end_goal`（模型專用英文任務方向）。`ALTER ADD COLUMN … DEFAULT ''` 後八筆 `UPDATE`；**不**改 `0001` / `0002`；後續功能**不得**改這些字串 |
+| `0008_scenario_closing_intent.sql` | `scenarios.closing_intent`（模型專用英文收尾意圖）。`ALTER ADD COLUMN … DEFAULT ''` 後八筆 `UPDATE`；**不**改 `0001` / `0002` / `0007` |
+| `0009_session_review_outcome.sql` | `session_reviews.outcome`（`completed` / `incomplete` / `manual`）。`ALTER ADD COLUMN … DEFAULT 'manual'`；**不**重建 `0006` |
 
 列表與對話頁的 `getScenario()` / `listScenarios()` **讀 DB**，不再直接讀 TS 陣列。
 
@@ -315,8 +321,8 @@ erDiagram
 | `elevenlabs_voices` | 那個角色用哪顆 ElevenLabs 音色（`is_free` 標記免費方案可用） |
 | `sessions` | 這段練習屬於誰、哪個情境 |
 | `messages` | **記憶**——每次呼叫 Gemini 時整段歷史都從這裡撈出來重送 |
-| `session_reviews` | **談話後回饋**——一段練習最多一列 Canonical JSON（建議／單字／文法／句子） |
-| `api_calls` | **用量帳**——一列 = 一次計費呼叫，`kind` 分對話、語音與談話回饋 |
+| `session_reviews` | **談話後回饋**——一段練習最多一列 Canonical JSON（建議／單字／文法／句子）加上 `outcome` |
+| `api_calls` | **用量帳**——一列 = 一次計費呼叫，`kind` 分對話、語音、談話回饋與結束判斷 |
 | `api_logs` | **原始紀錄**——一列 = 一次對外呼叫，含送出/收到的實際內容與狀態碼 |
 | `agent_runs` | **需求執行**——一次 Cursor 多角色迴圈（編排器 → PM → QA → 前端/後端） |
 | `agent_turns` | 該迴圈裡每一個角色產出／審查／修復；token 可為 NULL |
@@ -324,7 +330,7 @@ erDiagram
 `messages` 與 `api_calls` 刻意分開：一次失敗的呼叫不會產生 AI 訊息，
 但它**仍然是一次呼叫**，必須計入用量與錯誤率。
 
-「來回次數」只數 `kind='chat'`——語音合成與談話回饋是附加成本，不是一次對話往返，
+「來回次數」只數 `kind='chat'`——語音合成、談話回饋與結束判斷是附加成本，不是一次對話往返，
 混在一起數會讓「練了幾輪」這個數字失真。
 
 ### `api_calls` 與 `api_logs` 的差別
@@ -335,7 +341,7 @@ erDiagram
 |---|---|---|
 | 用途 | 用量統計與聚合 | 除錯與稽核 |
 | 記錄什麼 | token 數、延遲、成敗 | 連同**實際送出與收到的文字**、HTTP 狀態碼、平台、端點 |
-| 涵蓋範圍 | 對話、語音與談話回饋 | **所有**對外呼叫，含不花 token 的 `verify-key` |
+| 涵蓋範圍 | 對話、語音、談話回饋與結束判斷 | **所有**對外呼叫，含不花 token 的 `verify-key` |
 | 外鍵 | 有（`session_id`） | **無**——記錄失敗絕不能拖垮請求 |
 
 `/usage` 的「各情境用量」以 `api_calls JOIN sessions` 取 `scenario_id`，不再讀 `api_calls.scenario_id`。
@@ -356,7 +362,7 @@ erDiagram
 ## 2. Token 與來回次數怎麼算
 
 **不是估算的。** 數字直接取自 Gemini 回應的 `usageMetadata`
-（[`lib/gemini.ts`](../lib/gemini.ts) 的 `generateReply` / `generateReview`）：
+（[`lib/gemini.ts`](../lib/gemini.ts) 的 `generateReply` / `judgeClosing` / `generateReview`）：
 
 | 顯示名稱 | 來源欄位 |
 |---|---|
@@ -366,8 +372,8 @@ erDiagram
 | 總計 | `totalTokenCount` |
 
 **來回次數** = `api_calls` 中 `kind='chat'` 的列數。成功與失敗都算，因為兩者都送出了請求。
-語音合成另外統計（`kind='tts'`），談話回饋另計（`kind='review'`），用量頁分成兩張卡（對話／語音）；
-回饋 token 會進未篩選的「全部 token」與每日序列，但不進「來回」與各情境「只計對話」。
+語音合成另外統計（`kind='tts'`），談話回饋另計（`kind='review'`），結束判斷另計（`kind='judge'`），
+用量頁分成兩張卡（對話／語音）；回饋與判斷 token 會進未篩選的「全部 token」與每日序列，但不進「來回」與各情境「只計對話」。
 
 注意 `promptTokenCount` 會隨對話變長而**持續增加**——每次呼叫都重送整段歷史。
 這是自管記憶的必然代價，用量頁的「輸入 / 輸出」比例就是在觀察這件事。
@@ -382,8 +388,8 @@ erDiagram
 | Helper | 用途 |
 |---|---|
 | `getSession(sessionId, userId)` | 練習列；找不到或非本人 → `undefined`。POST 用 `scenario_id` → `getScenario` |
-| `getSessionReview(sessionId, userId)` | `{ id, session_id, user_student_id, payload, model, created_at }`；不符 → `undefined`。呼叫端 `parseSessionReview(payload)` |
-| `insertSessionReview({ sessionId, userId, payload, model })` | 成功產生後 INSERT；UNIQUE 衝突由 route 重讀 |
+| `getSessionReview(sessionId, userId)` | `{ id, session_id, user_student_id, payload, model, outcome, created_at }`；不符 → `undefined`。呼叫端 `parseSessionReview(payload)`；`outcome` 是 stored 值 |
+| `insertSessionReview({ sessionId, userId, payload, model, outcome })` | 成功產生後 INSERT（寫入 `outcome`）；UNIQUE 衝突由 route 重讀 |
 | `deleteSessionReview(sessionId, userId)` | 明確 POST 遇到壞 payload 時先刪再產生 |
 | `countUserMessages(sessionId, userId)` | 該擁有 session 的 `role='user'` 則數。須在 `sessionExists` 之後才呼叫 |
 
@@ -412,11 +418,41 @@ Google 現在推薦新專案用 Interactions API，但它**把對話歷史存在
 
 ### System instruction（對話）
 
-由 `buildSystemInstruction(scenario)` 從情境資料組出來，用到
-`persona`、`title`、`blurb`、`level`、`focus` 五個欄位（見 [SCENARIOS.md](SCENARIOS.md)）。
-內容包含：角色設定、場景、依難度調整的語言複雜度、要引導的句型，
-以及幾條硬規則（不出戲、只用英文、1–3 句加一個問題、純口語不要 markdown——
-因為回覆會被語音合成唸出來）。**談話回饋不走這條 prompt。**
+由 `buildSystemInstruction(scenario, { closingTurn })` 從情境資料組出來，用到
+`persona`、`title`、`blurb`、`level`、`focus`、`endGoal`（見 [SCENARIOS.md](SCENARIOS.md)）。
+`endGoal` 只當**任務方向**，不要叫角色扮演模型輸出 `ended` / `goal_met` / `closing`。
+`closingIntent` **不進**角色扮演 prompt。回覆形狀由 route 的 `closingTurn` 決定：
+一般回合 1–3 句加一個問題；收尾回合 1–3 句角色內收尾、不問問題。
+純口語不要 markdown（回覆會被語音合成唸出來）。
+**談話回饋與結束判斷不走這條 prompt。**
+
+`generateReply` 的 JSON 必填 `reply`、`emotion`。**已移除 `ended`。**
+`POST /api/chat` **200** 回傳 `wrapUp: null | { outcome: "completed" | "incomplete" }`
+（與 `sessionId` / `reply` / `emotion` / `usage` / `latencyMs` / `model` 並列）。
+`usage` / `latencyMs` 只記**角色扮演**那次呼叫。錯誤回應不含 `wrapUp` / `ended`。
+角色扮演的 `api_calls.kind` 與 `onCall.operation` 仍是 `chat`。
+
+### 結束判斷（`judgeClosing`）
+
+每個**學習者**回合在 `generateReply` **之前**另呼一次 Gemini（`temperature: 0.2`）。
+開場白不是學習者回合，不跑判斷。同一支 `POST /api/chat` 只判斷一次。
+
+- 輸入：`endGoal`、`closingIntent`、shared judge rule（只出現一次）、該 session 最近 6 則訊息（含本回合 user，不含尚未寫入的 model 回覆）
+- 輸出：嚴格 JSON `{"goal_met": boolean, "closing": boolean}`
+- 任一欄缺漏或不是 boolean、JSON 解析失敗、空 candidate、schema 無效 → **兩旗標都當 false**，`kind='judge'` `ok=0`，然後仍跑角色扮演
+- 兩旗標獨立：`closing` 不要求任務已完成
+- token 只信 `usageMetadata`；`recordCall({ kind: "judge" })`；`onCall.operation = "judge"`
+- 不計入來回（`getSessionStats` / 各情境用量仍只數 `kind='chat'`）
+
+伺服器決策（`decideWrapUp`，`MAX_USER_TURNS = 12`）：
+
+| 判斷 / 上限 | `wrapUp` |
+|---|---|
+| `goal_met` 且 `closing` | `{ outcome: "completed" }` |
+| 只有 `goal_met`，user 則數 &lt; 12 | `null` |
+| 只有 `closing` | `{ outcome: "incomplete" }` |
+| 兩旗標都 false，user 則數 &lt; 12 | `null` |
+| user 則數 ≥ 12 且不是兩旗標都 true | `{ outcome: "incomplete" }` |
 
 ### 談話回饋（`generateReview`）
 
@@ -439,7 +475,7 @@ Google 現在推薦新專案用 Interactions API，但它**把對話歷史存在
 需要 `VOICES`、`DEFAULT_MODEL` 這些常數），所以**那個檔案裡絕對不能 import 資料庫**，
 否則前端 build 會炸。
 
-因此改用回呼：`generateReply` / `generateReview` / `synthesizeSpeech` / `verifyKey` 都接受一個
+因此改用回呼：`generateReply` / `judgeClosing` / `generateReview` / `synthesizeSpeech` / `verifyKey` 都接受一個
 `onCall?: ApiCallLogger`，在 fetch 回來後**不論成敗**都會帶著完整的 `ApiCallRecord` 觸發一次。
 Route handler（server-only）再傳 `onCall: (call) => logApiCall({ ...call, sessionId })` 進去。
 
@@ -598,9 +634,10 @@ Voice Library 的音色在免費方案會回 402，畫面會說明原因並改�
 3. 沒有 `sessionId` → 建立 session，並**先寫入情境開場白**作為第一則 `model` 訊息。
    新房間通常已有開場 TTS 建好的 id，這一步只在瀏覽器語音（沒打 TTS API）時才會走到。
 4. 寫入使用者訊息
-5. `getHistory()` 撈整段歷史 → 呼叫 Gemini
-6. 成功：寫入 AI 訊息 + 寫入 `api_calls`（`ok=1`）
-7. 失敗：**仍然寫入 `api_calls`**（`ok=0` 加錯誤訊息），回傳錯誤
+5. `getHistory()` 取最近 6 則 → `judgeClosing` → `api_calls` `kind='judge'`（成功或 `ok=0`）
+6. 依判斷與 12 則上限決定 `wrapUp` 與 `closingTurn`
+7. `generateReply`（不再回 `ended`）→ 寫入 AI 訊息 + `api_calls` `kind='chat'`
+8. 成功：**200** 含 `wrapUp`。角色扮演失敗：既有 `error` + `kind='chat'` `ok=0`；不含 `wrapUp`；判斷列已寫入
 
 `/chat/[id]?session=<id>` 可以續接舊對話，用量頁的「最近的對話」就是連到這個。
 `?mode=` 決定進哪一種介面（`script` / `live`）；兩者都走同一組 API 與資料表，
@@ -614,9 +651,10 @@ Voice Library 的音色在免費方案會回 402，畫面會說明原因並改�
 2. Lookup：缺 `sessionId` → 400；`sessionExists` 否 → 404 `找不到這段對話`；
    擁有的 session 沒有 `role='user'` 訊息 → 400（不呼叫 Gemini、不寫 `api_calls`）
 3. `getSession` → `getScenario(session.scenario_id)`；目錄列缺失 → 502，不呼叫 Gemini
-4. 既有 `session_reviews.payload` 是合法 `SessionReview` → **200** `cached: true`（不再呼叫 Gemini）
-5. 沒有列或 payload 壞掉：刪掉壞列 → `generateReview` → INSERT → **201** `cached: false`
-6. 失敗：`api_calls` `kind='review'` `ok=0`，HTTP `error` 固定為「回饋沒有產生，請再試一次。」
+4. 既有 `session_reviews.payload` 是合法 `SessionReview` → **200** `{ cached: true, review, sessionId, model, outcome }`，`outcome` 用**已存**的值；可省略 body `outcome`
+5. 沒有列或 payload 壞掉：generate 路徑 body 必須是 `{ sessionId, outcome }`，`outcome` 為 `completed` / `incomplete` / `manual`，否則 **400** `結束方式無效`（不呼叫 Gemini、不寫 `api_calls`）
+6. 刪掉壞列 → `generateReview` → `insertSessionReview`（寫入 `outcome`）→ **201** 含 `outcome`
+7. 失敗：`api_calls` `kind='review'` `ok=0`，HTTP `error` 固定為「回饋沒有產生，請再試一次。」
 
 [`app/api/speak/route.ts`](../app/api/speak/route.ts) 與 [`app/api/elevenlabs/route.ts`](../app/api/elevenlabs/route.ts) 是同樣的形狀：驗 key → 驗音色 →
 （必要時建 session）→ 合成 → 寫 `api_calls`（`kind='tts'`）→ 回傳音訊。
@@ -653,7 +691,7 @@ Voice Library 的音色在免費方案會回 402，畫面會說明原因並改�
 - **決定**：**B**。
 - **理由**：
   - `role_type` **既不顯示在 UI、也不進 Gemini prompt**（system instruction 只用
-    `persona`/`title`/`blurb`/`level`/`focus`），所以獨立一張表是過度正規化。
+    `persona`/`title`/`blurb`/`level`/`focus`/`endGoal`；`closingIntent` 只進判斷呼叫），所以獨立一張表是過度正規化。
   - 對 **token 完全沒有影響**——送給模型的內容與角色綁不綁表無關。
   - `persona` 本來就必須「每情境一份」（同樣是工作人員，咖啡店店員 ≠ 飯店櫃檯），
     留在 `scenarios` 最直接。

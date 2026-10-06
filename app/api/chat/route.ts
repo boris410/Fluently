@@ -1,5 +1,6 @@
 import {
   appendMessage,
+  countUserMessages,
   createSession,
   getHistory,
   getScenario,
@@ -13,12 +14,16 @@ import {
   DEFAULT_MODEL,
   GeminiError,
   buildSystemInstruction,
+  decideWrapUp,
   generateReply,
+  judgeClosing,
+  sliceJudgeTurns,
 } from "@/lib/gemini";
+import { MAX_USER_TURNS } from "@/lib/scenarios";
 
 /**
- * One conversational turn: persist what the learner said, ask Gemini for
- * the reply, persist that too, and record the token cost of the round trip.
+ * One conversational turn: persist what the learner said, judge wrap-up,
+ * ask Gemini for the reply, persist that too, and record both calls.
  */
 export async function POST(request: Request) {
   const user = await getCurrentUser();
@@ -79,12 +84,42 @@ export async function POST(request: Request) {
     role: m.role,
     text: m.content,
   }));
+  const judgeTurns = sliceJudgeTurns(turns);
+  const userTurns = await countUserMessages(sessionId, user.id);
+
+  const judge = await judgeClosing({
+    apiKey,
+    model,
+    endGoal: scenario.endGoal,
+    closingIntent: scenario.closingIntent,
+    turns: judgeTurns,
+    onCall: (call) => logApiCall({ ...call, sessionId }),
+  });
+
+  await recordCall({
+    sessionId,
+    kind: "judge",
+    model,
+    promptTokens: judge.usage.promptTokens,
+    outputTokens: judge.usage.outputTokens,
+    thoughtTokens: judge.usage.thoughtTokens,
+    totalTokens: judge.usage.totalTokens,
+    latencyMs: judge.latencyMs,
+    ok: judge.ok,
+    error: judge.error,
+  });
+
+  const { wrapUp, closingTurn } = decideWrapUp(
+    { goal_met: judge.goal_met, closing: judge.closing },
+    userTurns,
+    MAX_USER_TURNS,
+  );
 
   try {
     const result = await generateReply({
       apiKey,
       model,
-      systemInstruction: buildSystemInstruction(scenario),
+      systemInstruction: buildSystemInstruction(scenario, { closingTurn }),
       turns,
       onCall: (call) => logApiCall({ ...call, sessionId }),
     });
@@ -106,6 +141,7 @@ export async function POST(request: Request) {
       sessionId,
       reply: result.text,
       emotion: result.emotion,
+      wrapUp,
       usage: result.usage,
       latencyMs: result.latencyMs,
       model,

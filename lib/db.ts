@@ -30,7 +30,7 @@ export type StoredMessage = {
   created_at: number;
 };
 
-export type CallKind = "chat" | "tts" | "review";
+export type CallKind = "chat" | "tts" | "review" | "judge";
 
 export type ApiCall = {
   id: number;
@@ -125,6 +125,8 @@ type ScenarioRow = {
   level: Level;
   focus: string;
   opening: string;
+  end_goal: string;
+  closing_intent: string;
   persona: string;
   role_type: RoleType;
   emoji: string;
@@ -151,13 +153,15 @@ function hydrateScenario(row: ScenarioRow): Scenario {
     persona: row.persona,
     focus,
     opening: row.opening,
+    endGoal: row.end_goal,
+    closingIntent: row.closing_intent,
     tint: [row.tint_light, row.tint_dark],
   };
 }
 
 const SCENARIO_SELECT = `
   SELECT sc.id, sc.title, sc.title_zh, sc.blurb, sc.level, sc.focus, sc.opening,
-         sc.persona, sc.role_type, sn.emoji, sn.tint_light, sn.tint_dark
+         sc.end_goal, sc.closing_intent, sc.persona, sc.role_type, sn.emoji, sn.tint_light, sn.tint_dark
   FROM scenarios sc
   JOIN scenes sn ON sn.id = sc.scene_id
 `;
@@ -289,6 +293,7 @@ export type SessionReviewRow = {
   user_student_id: string;
   payload: string;
   model: string;
+  outcome: string;
   created_at: number;
 };
 
@@ -298,7 +303,7 @@ export async function getSessionReview(
 ): Promise<SessionReviewRow | undefined> {
   const db = await getDb();
   return db.first<SessionReviewRow>(
-    `SELECT id, session_id, user_student_id, payload, model, created_at
+    `SELECT id, session_id, user_student_id, payload, model, outcome, created_at
        FROM session_reviews
       WHERE session_id = ? AND user_student_id = ?
       LIMIT 1`,
@@ -311,14 +316,23 @@ export async function insertSessionReview(row: {
   userId: string;
   payload: string;
   model: string;
+  outcome: string;
 }): Promise<string> {
   const db = await getDb();
   const id = crypto.randomUUID();
   await db.run(
     `INSERT INTO session_reviews
-       (id, session_id, user_student_id, payload, model, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [id, row.sessionId, row.userId, row.payload, row.model, Date.now()],
+       (id, session_id, user_student_id, payload, model, outcome, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id,
+      row.sessionId,
+      row.userId,
+      row.payload,
+      row.model,
+      row.outcome,
+      Date.now(),
+    ],
   );
   return id;
 }
