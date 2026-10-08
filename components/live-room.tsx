@@ -165,9 +165,7 @@ export function LiveRoom({
 
         {!hasKey && (
           <div className="mt-8 w-full rounded-xl border border-clay/40 bg-clay-wash px-4 py-3 text-left text-[14px] leading-6">
-            還沒設定 Gemini API key。點右上角
-            <span className="mx-1 font-medium">設定</span>
-            貼上你的 key 就可以開始。
+            還沒設定 Gemini API key。到<Link href="/backend" className="font-medium text-clay underline underline-offset-2">後台</Link>貼上你的 key 就可以開始。
           </div>
         )}
 

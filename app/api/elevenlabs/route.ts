@@ -86,15 +86,13 @@ export async function POST(request: Request) {
     (await defaultVoiceId());
   if (!voiceId) {
     return Response.json(
-      { error: "還沒有音色。elevenlabs_voices 表裡沒有任何聲音。" },
+      { error: "還沒有音色。請到音色目錄新增一顆。" },
       { status: 400 },
     );
   }
 
   const knownModel = ELEVENLABS_MODELS.some((m) => m.id === body.model);
-  const model = knownModel
-    ? body.model!
-    : process.env.ELEVENLABS_MODEL?.trim() || DEFAULT_ELEVENLABS_MODEL;
+  const model = knownModel ? body.model! : DEFAULT_ELEVENLABS_MODEL;
 
   try {
     const result = await synthesizeElevenLabs({

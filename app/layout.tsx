@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Source_Serif_4 } from "next/font/google";
+import { ThemeBoot } from "@/components/theme-boot";
 import { THEME_STORAGE_KEY } from "@/lib/theme";
 import "./globals.css";
 
@@ -41,6 +42,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
       <body className="min-h-full flex flex-col bg-canvas text-ink">
+        <ThemeBoot />
         {children}
       </body>
     </html>

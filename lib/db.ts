@@ -11,9 +11,12 @@ import { type Level, type RoleType, type Scenario } from "@/lib/scenarios";
  *
  * D1's API is async, so every exported function returns a Promise.
  *
- * Multi-user: every read/write is scoped by `userId` (the better-auth
+ * Multi-user: practice reads/writes are scoped by `userId` (the better-auth
  * `user.id`, mirrored into `sessions.user_student_id`). Callers resolve the
  * user via `getCurrentUser()` and must pass the id in.
+ *
+ * Exception: `elevenlabs_voices` / `characters` catalog helpers are global
+ * (no `user_id`). Any signed-in operator sees and edits the same rows.
  */
 
 export type MessageRole = "user" | "model";
@@ -209,6 +212,175 @@ export async function defaultVoiceId(): Promise<string | null> {
   );
   const id = row?.voice_id?.trim();
   return id || null;
+}
+
+export type VoiceRow = {
+  id: string;
+  voice_id: string;
+  label: string;
+  is_free: 0 | 1;
+};
+
+export type CharacterRow = {
+  id: string;
+  name: string;
+  elevenlabs_voice_id: string;
+};
+
+export class DuplicateVoiceIdError extends Error {
+  constructor(id: string) {
+    super(`duplicate voice id: ${id}`);
+    this.name = "DuplicateVoiceIdError";
+  }
+}
+
+function hydrateVoice(row: VoiceRow): VoiceRow {
+  return {
+    id: row.id,
+    voice_id: row.voice_id,
+    label: row.label,
+    is_free: row.is_free === 1 ? 1 : 0,
+  };
+}
+
+function hydrateCharacter(row: CharacterRow): CharacterRow {
+  return {
+    id: row.id,
+    name: row.name,
+    elevenlabs_voice_id: row.elevenlabs_voice_id,
+  };
+}
+
+function isUniqueConstraint(error: unknown): boolean {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let i = 0; i < 4 && current; i++) {
+    if (current instanceof Error) {
+      parts.push(current.message, current.name);
+      current = current.cause;
+    } else {
+      parts.push(String(current));
+      break;
+    }
+  }
+  return parts.some((p) => /UNIQUE constraint failed/i.test(p));
+}
+
+export async function listVoices(): Promise<VoiceRow[]> {
+  const db = await getDb();
+  const rows = await db.all<VoiceRow>(
+    "SELECT id, voice_id, label, is_free FROM elevenlabs_voices ORDER BY id ASC",
+  );
+  return rows.map(hydrateVoice);
+}
+
+export async function getVoice(id: string): Promise<VoiceRow | undefined> {
+  const db = await getDb();
+  const row = await db.first<VoiceRow>(
+    "SELECT id, voice_id, label, is_free FROM elevenlabs_voices WHERE id = ? LIMIT 1",
+    [id],
+  );
+  return row ? hydrateVoice(row) : undefined;
+}
+
+export async function insertVoice(input: {
+  id: string;
+  voice_id: string;
+  label: string;
+  is_free: 0 | 1;
+}): Promise<VoiceRow> {
+  if (await getVoice(input.id)) {
+    throw new DuplicateVoiceIdError(input.id);
+  }
+  const db = await getDb();
+  try {
+    await db.run(
+      `INSERT INTO elevenlabs_voices (id, voice_id, label, is_free)
+       VALUES (?, ?, ?, ?)`,
+      [input.id, input.voice_id, input.label, input.is_free],
+    );
+  } catch (error) {
+    if (isUniqueConstraint(error)) {
+      throw new DuplicateVoiceIdError(input.id);
+    }
+    throw error;
+  }
+  const created = await getVoice(input.id);
+  if (!created) throw new Error("voice insert missing");
+  return created;
+}
+
+export async function updateVoice(
+  id: string,
+  patch: { voice_id?: string; label?: string; is_free?: 0 | 1 },
+): Promise<VoiceRow | undefined> {
+  const existing = await getVoice(id);
+  if (!existing) return undefined;
+  const db = await getDb();
+  await db.run(
+    `UPDATE elevenlabs_voices
+        SET voice_id = ?, label = ?, is_free = ?
+      WHERE id = ?`,
+    [
+      patch.voice_id ?? existing.voice_id,
+      patch.label ?? existing.label,
+      patch.is_free ?? existing.is_free,
+      id,
+    ],
+  );
+  return getVoice(id);
+}
+
+export async function countCharactersUsingVoice(id: string): Promise<number> {
+  const db = await getDb();
+  const row = await db.first<{ n: number }>(
+    "SELECT COUNT(*) AS n FROM characters WHERE elevenlabs_voice_id = ?",
+    [id],
+  );
+  return Number(row?.n ?? 0);
+}
+
+export async function deleteVoice(
+  id: string,
+): Promise<"ok" | "not_found" | "in_use"> {
+  if (!(await getVoice(id))) return "not_found";
+  if ((await countCharactersUsingVoice(id)) >= 1) return "in_use";
+  const db = await getDb();
+  await db.run("DELETE FROM elevenlabs_voices WHERE id = ?", [id]);
+  return "ok";
+}
+
+export async function listCharacters(): Promise<CharacterRow[]> {
+  const db = await getDb();
+  const rows = await db.all<CharacterRow>(
+    "SELECT id, name, elevenlabs_voice_id FROM characters ORDER BY id ASC",
+  );
+  return rows.map(hydrateCharacter);
+}
+
+export async function getCharacter(
+  id: string,
+): Promise<CharacterRow | undefined> {
+  const db = await getDb();
+  const row = await db.first<CharacterRow>(
+    "SELECT id, name, elevenlabs_voice_id FROM characters WHERE id = ? LIMIT 1",
+    [id],
+  );
+  return row ? hydrateCharacter(row) : undefined;
+}
+
+export async function updateCharacterVoice(
+  id: string,
+  elevenlabs_voice_id: string,
+): Promise<CharacterRow | undefined> {
+  const existing = await getCharacter(id);
+  if (!existing) return undefined;
+  const db = await getDb();
+  await db.run(
+    "UPDATE characters SET elevenlabs_voice_id = ? WHERE id = ?",
+    [elevenlabs_voice_id, id],
+  );
+  return getCharacter(id);
 }
 
 async function sessionStudentId(sessionId: string): Promise<string | null> {

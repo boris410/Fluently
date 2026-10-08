@@ -105,11 +105,11 @@ export function UserMenu() {
             用量統計 <span aria-hidden>→</span>
           </Link>
           <Link
-            href="/runs"
+            href="/backend"
             onClick={() => setOpen(false)}
             className="flex items-center justify-between rounded-lg px-3 py-2 text-[13px] text-ink-soft transition-colors hover:bg-surface-2 hover:text-ink"
           >
-            需求執行 <span aria-hidden>→</span>
+            後台 <span aria-hidden>→</span>
           </Link>
 
           <hr className="my-1 border-line" />

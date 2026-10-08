@@ -47,10 +47,11 @@
 - **深色模式有三層解析順序**，全部靠 CSS 變數，**永遠不要寫 `dark:` class 前綴**：
   1. `:root` — 淺色，預設值
   2. `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) }` — 跟隨系統
-  3. `:root[data-theme="dark"]` / `[data-theme="light"]` — 使用者在設定選單的手動指定
+  3. `:root[data-theme="dark"]` / `[data-theme="light"]` — 使用者在後台 `/backend` 的手動指定
 
   `<html>` 上的 `data-theme` 由兩處寫入：[`app/layout.tsx`](../app/layout.tsx) 的 inline script
-  （在首次繪製前套用，避免閃爍）與 [`components/settings-menu.tsx`](../components/settings-menu.tsx)。
+  （在首次繪製前套用，避免閃爍）與 root layout 掛載的 [`components/theme-boot.tsx`](../components/theme-boot.tsx)
+  （`useLayoutEffect` 在 Strict Mode remount 後再套一次）。在 `/backend` 選外觀仍走 `storeTheme` + `applyTheme`。
   **沒有 `data-theme` 屬性 = 跟隨系統。**
 - 深色色值在 CSS 裡刻意寫了兩份（media query 一份、`[data-theme="dark"]` 一份），
   **改的時候兩份都要改**，內容必須完全一致。
@@ -140,7 +141,7 @@
 | `.rise` | 淡入上浮 0.75s | 進場元素；用 `[animation-delay:80ms]` 之類錯開 |
 | `.glow` | 緩慢呼吸縮放 7s | Hero 背後的色暈 |
 | `.caret` | 游標閃爍 | 打字動畫的游標 |
-| `.pop` | 下拉淡入 0.18s | 彈出面板（設定選單） |
+| `.pop` | 下拉淡入 0.18s | 彈出面板（帳號選單） |
 | `.ripple` | 環狀脈動 2.4s | 真實情境模式「換你說」的狀態圓點 |
 | `.voice-wave` | 聲音波形條 0.65s | 麥克風偵測到語音時，按鈕內的 clay 波形 |
 
@@ -284,6 +285,26 @@ className="flex gap-1 rounded-lg bg-surface-2 p-1"
 className="flex-1 rounded-md px-2 py-1.5 text-[13px] text-ink-soft transition-colors hover:text-ink"
 ```
 
+**後台 sidebar**
+
+`/backend` 是左側 sidebar + 中間 pane，pathname 停在 `/backend`。容器 **`max-w-6xl`**，水平內距仍是 `px-5 sm:px-8`。標題下方：`flex flex-col gap-6 lg:flex-row lg:gap-8`。
+
+```tsx
+// 左欄
+className="w-full lg:w-56 lg:shrink-0 lg:border-r lg:border-line/70 lg:pr-6"
+// 項目（button，不是 Link）
+className="rounded-lg px-3 py-2 text-[13px] text-ink-soft hover:bg-surface-2 hover:text-ink"
+// 選中
+className="rounded-lg px-3 py-2 text-[13px] bg-surface-2 text-ink"
+// aria-current="true"
+// 中欄
+className="min-w-0 flex-1"
+// pane 標題 = 側欄標籤
+className="font-display text-[28px] sm:text-[32px]"
+```
+
+沒有新的色彩 token。開發者工具只在 `IS_DEV` 出現。
+
 ---
 
 ## 7. 檔案位置
@@ -291,21 +312,28 @@ className="flex-1 rounded-md px-2 py-1.5 text-[13px] text-ink-soft transition-co
 | 路徑 | 內容 |
 |---|---|
 | [`app/globals.css`](../app/globals.css) | 色彩 token、`@theme inline` 映射、動畫、`.tinted` |
-| [`app/layout.tsx`](../app/layout.tsx) | 字型載入、`<html>` 變數、全站 metadata |
+| [`app/layout.tsx`](../app/layout.tsx) | 字型載入、`<html>` 變數、全站 metadata、inline theme script |
+| [`components/theme-boot.tsx`](../components/theme-boot.tsx) | 無 UI：root layout 掛載，Strict Mode remount 後再套 `fluently-theme` |
 | [`components/logo.tsx`](../components/logo.tsx) | `Mark`（對話框 + sparkle）與 `Wordmark` |
 | [`components/site-header.tsx`](../components/site-header.tsx) · [`site-footer.tsx`](../components/site-footer.tsx) | 共用框架 |
 | [`lib/scenarios.ts`](../lib/scenarios.ts) | 情境資料，含每個情境的 `tint` |
 | [`lib/theme.ts`](../lib/theme.ts) | 主題型別、`localStorage` key、`applyTheme()` |
 | [`lib/devtools.ts`](../lib/devtools.ts) | Next.js DevTools dev-server 端點的用戶端（**僅開發模式**） |
-| [`components/settings-menu.tsx`](../components/settings-menu.tsx) | 設定選單：外觀、家教聲音（角色／Gemini／系統）、DevTools |
+| [`app/backend/page.tsx`](../app/backend/page.tsx) | 後台 RSC：auth、TTS props，掛 sidebar + center-pane shell |
+| [`components/backend-shell.tsx`](../components/backend-shell.tsx) | 後台 client shell：左側按鈕切換中間 pane，pathname 停在 `/backend` |
+| [`components/settings-panel.tsx`](../components/settings-panel.tsx) | 後台設定 panes：Gemini key、家教聲音（角色／Gemini／系統 + 外觀）、DevTools |
+| [`components/usage-body.tsx`](../components/usage-body.tsx) | 用量統計內容（camelCase tiles / 長條圖 / 表格 / 最近的對話） |
+| [`components/logs-body.tsx`](../components/logs-body.tsx) | API 呼叫紀錄列（camelCase `<details>`）與空狀態 |
 | [`app/api/devtools-config/route.ts`](../app/api/devtools-config/route.ts) | 讀取 DevTools 設定檔的 dev-only route handler |
 | [`components/chat-room.tsx`](../components/chat-room.tsx) | 獨白式對話：逐字稿、單一麥克風送出、每回合 token |
 | [`components/talk-mic.tsx`](../components/talk-mic.tsx) | 單一麥克風按鈕；偵測到語音才顯示波形 |
 | [`lib/use-hold-mic.ts`](../lib/use-hold-mic.ts) | 按一下開麥、再按送出；停頓不送出 |
-| [`app/usage/page.tsx`](../app/usage/page.tsx) | 用量統計頁：stat tile、長條圖、表格 |
-| [`app/logs/page.tsx`](../app/logs/page.tsx) | API 紀錄頁：篩選 pill、`<details>` 展開列、分頁 |
+| [`app/usage/page.tsx`](../app/usage/page.tsx) | 用量統計獨立頁：snake_case → camelCase 後渲染 `UsageBody`，並保留紀錄摘要與 `/logs` 連結 |
+| [`app/logs/page.tsx`](../app/logs/page.tsx) | API 紀錄獨立頁：URL query + RSC `form action="/logs"`，列資料走 `LogsBody` |
 | [`app/tts/page.tsx`](../app/tts/page.tsx) | ElevenLabs TTS 測試頁 |
-| [`components/elevenlabs-tts-tester.tsx`](../components/elevenlabs-tts-tester.tsx) | TTS 測試表單：句子、voice id、播放 |
+| [`app/voices/page.tsx`](../app/voices/page.tsx) | 音色目錄：全域 ElevenLabs 音色 CRUD 與人物指派 |
+| [`components/voice-catalog.tsx`](../components/voice-catalog.tsx) | 音色目錄表單：列表、新增、編輯、刪除、人物 select |
+| [`components/elevenlabs-tts-tester.tsx`](../components/elevenlabs-tts-tester.tsx) | TTS 測試表單：句子、資料庫預設音色、播放；後台 pane 可用 `onOpenVoiceCatalog` 切到音色目錄 |
 | [`lib/elevenlabs.ts`](../lib/elevenlabs.ts) | ElevenLabs TTS 客戶端（`onCall` 記 log，不碰資料庫） |
 | [`app/api/elevenlabs/route.ts`](../app/api/elevenlabs/route.ts) | 伺服器轉發 ElevenLabs，key 不進瀏覽器 |
 | [`components/live-room.tsx`](../components/live-room.tsx) | 真實情境模式：舞台、狀態文字、按一下說話 |

@@ -1,14 +1,17 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ELEVENLABS_MODELS } from "@/lib/elevenlabs";
 
 export function ElevenLabsTtsTester({
   configured,
   voiceId,
+  onOpenVoiceCatalog,
 }: {
   configured: boolean;
   voiceId: string | null;
+  onOpenVoiceCatalog?: () => void;
 }) {
   const [text, setText] = useState("Hello, what do you have in mind today?");
   const [model, setModel] = useState(ELEVENLABS_MODELS[0].id);
@@ -98,10 +101,23 @@ export function ElevenLabsTtsTester({
       )}
       {configured && !voiceId && (
         <div className="mb-5 rounded-xl border border-clay/40 bg-clay-wash px-4 py-3 text-[14px] leading-6">
-          還沒設定音色。在
-          <code className="mx-1 font-mono text-[13px]">.env.local</code>
-          加上 <code className="font-mono text-[13px]">ELEVENLABS_VOICE_ID</code>
-          後重開 dev server。
+          還沒有可用的音色。請到音色目錄新增一顆。{" "}
+          {onOpenVoiceCatalog ? (
+            <button
+              type="button"
+              onClick={onOpenVoiceCatalog}
+              className="text-clay underline underline-offset-2"
+            >
+              音色目錄
+            </button>
+          ) : (
+            <Link
+              href="/voices"
+              className="text-clay underline underline-offset-2"
+            >
+              音色目錄
+            </Link>
+          )}
         </div>
       )}
 
@@ -115,9 +131,11 @@ export function ElevenLabsTtsTester({
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2">
         <label className="block">
-          <span className="text-[13px] text-ink-muted">Voice ID（.env.local）</span>
+          <span className="text-[13px] text-ink-muted">
+            預設音色（資料庫，偏好免費）
+          </span>
           <p className="mt-2 truncate rounded-xl border border-line bg-canvas px-3 py-2.5 font-mono text-[13px] text-ink">
-            {voiceId ?? "尚未設定 ELEVENLABS_VOICE_ID"}
+            {voiceId ?? "尚未設定"}
           </p>
         </label>
         <label className="block">

@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { Wordmark } from "@/components/logo";
-import { SettingsMenu } from "@/components/settings-menu";
 import { UserMenu } from "@/components/user-menu";
 
 export function SiteHeader({ compact = false }: { compact?: boolean }) {
@@ -25,7 +24,6 @@ export function SiteHeader({ compact = false }: { compact?: boolean }) {
               </Link>
             </>
           )}
-          <SettingsMenu />
           <UserMenu />
         </nav>
       </div>

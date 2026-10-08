@@ -27,12 +27,20 @@ export default async function TtsPage() {
 
       <main className="flex-1 px-5 py-14 sm:px-8 sm:py-16">
         <div className="mx-auto w-full max-w-3xl">
-          <Link
-            href="/logs"
-            className="text-[13px] text-ink-muted transition-colors hover:text-ink"
-          >
-            ← API 呼叫紀錄
-          </Link>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <Link
+              href="/logs"
+              className="text-[13px] text-ink-muted transition-colors hover:text-ink"
+            >
+              ← API 呼叫紀錄
+            </Link>
+            <Link
+              href="/voices"
+              className="text-[13px] text-ink-muted transition-colors hover:text-ink"
+            >
+              音色目錄
+            </Link>
+          </div>
 
           <h1 className="mt-5 font-display text-[36px] leading-tight tracking-[-0.02em] sm:text-[44px]">
             ElevenLabs TTS
@@ -42,7 +50,7 @@ export default async function TtsPage() {
             <code className="mx-1 font-mono text-[14px]">.env.local</code>
             ，瀏覽器打的是我們自己的
             <code className="mx-1 font-mono text-[14px]">/api/elevenlabs</code>
-            ，不會把 key 送到前端。
+            ，不會把 key 送到前端。音色從資料庫讀，請到音色目錄管理。
           </p>
 
           <div className="mt-10">

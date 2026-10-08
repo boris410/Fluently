@@ -24,7 +24,9 @@ wrangler d1 migrations apply fluently_db --remote  # 正式
 
 D1 就是 SQLite，因此 `lib/db.ts` 每個匯出函式都回傳 `Promise`，呼叫端一律 `await`。
 
-多使用者：登入走 **better-auth + Google**。帳號存在 `user` / `session` / `account` / `verification`（`migrations/0003_auth.sql`）。首次登入時 databaseHook 會用同一個 `user.id` 在 `user_students` 建一列學習者檔案。練習資料（`sessions` / `messages` / `session_reviews` / `api_calls` / `api_logs`）都以 `user_student_id = user.id` 隔離；角色迴圈看板（`agent_runs` / `agent_turns`）以 `user_id = user.id` 隔離。沒登入不能進 `/scenarios`、`/chat`、`/usage`、`/logs`、`/tts`、`/runs`。
+多使用者：登入走 **better-auth + Google**。帳號存在 `user` / `session` / `account` / `verification`（`migrations/0003_auth.sql`）。首次登入時 databaseHook 會用同一個 `user.id` 在 `user_students` 建一列學習者檔案。練習資料（`sessions` / `messages` / `session_reviews` / `api_calls` / `api_logs`）都以 `user_student_id = user.id` 隔離；角色迴圈看板（`agent_runs` / `agent_turns`）以 `user_id = user.id` 隔離。沒登入不能進 `/scenarios`、`/chat`、`/usage`、`/logs`、`/tts`、`/voices`、`/runs`、`/backend`。
+
+後台 [`/backend`](../app/backend/page.tsx) 是 **sidebar + 中間 pane** 的操作殼：pathname 維持 `/backend`，切換用量／紀錄／音色／TTS 不離開此 URL。**需求執行** 不再從後台或 UserMenu 連出去；[`/runs`](../app/runs/page.tsx) 與 `GET/POST /api/runs*` 仍給編排器／agent 使用。
 
 Auth 變數：本機 `next dev` 讀 `.env.local`；`npm run preview` 讀 `.dev.vars`（兩份都要有同一組）。正式環境用 `wrangler secret put` 設 `BETTER_AUTH_SECRET`、`GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`。
 
@@ -266,11 +268,15 @@ wrangler d1 migrations apply fluently_db --local   # 本機（next dev / preview
 wrangler d1 migrations apply fluently_db --remote  # 正式
 ```
 
+`migrations apply` 只跑尚未套用的檔案，**不會**重跑已套用的 `0002_seed.sql`。
+本機若要重跑種子，用 `wrangler d1 execute fluently_db --local --file=migrations/0002_seed.sql`。
+`0002` 裡 `elevenlabs_voices` 與 `characters` 是 `ON CONFLICT(id) DO NOTHING`（已存在的目錄列不覆寫，`/voices` 的編輯會留下來）；場景與情境仍是 `DO UPDATE`。
+
 | 檔案 | 作用 |
 |---|---|
 | `0001_init.sql` | 建表（含 `DROP TABLE IF EXISTS roles`） |
 | `0001_schema_update.sql` | 給舊遠端 DB 補 `is_free` / `role_type` 等欄位 |
-| `0002_seed.sql` | 場景、Bella 音色、8 個情境（**不**再種 `default` 學習者） |
+| `0002_seed.sql` | 場景、Bella 音色、8 個情境（**不**再種 `default` 學習者）。目錄列 insert-if-missing；場景／情境仍 upsert |
 | `0003_auth.sql` | better-auth 的 `user` / `session` / `account` / `verification` |
 | `0004_user_link.sql` | 刪掉還存在的 seed `default` 學習者（沒有 sessions 才刪） |
 | `0005_agent_loop.sql` | `agent_runs` / `agent_turns`（Cursor 角色迴圈看板；不碰 Gemini 用量） |
@@ -354,8 +360,8 @@ erDiagram
 
 - **不要**寫進 `api_calls` 或 `api_logs`（含密鑰被拒的請求也不寫 log）。
 - **不要**估算缺失的 token；省略或 JSON `null` 存 SQL NULL。`SUM` 全為 NULL 時聚合也是 NULL，UI 顯示 — 而不是 `0`。
-- Gemini `/usage` 仍只讀 `api_calls`（`getTotals` 等），行為不變。
-- 頁面（`/runs`）import `listAgentRuns` / `getAgentRun` / `countAgentRunsByStatus`，讀 **snake_case**。`GET /api/runs*` 是同一組欄位的 camelCase 包裝，給編排器 POST/PATCH 用。
+- Gemini `/usage` 與 `GET /api/usage` 仍只讀 `api_calls`（`getTotals` 等），行為不變。
+- 頁面（`/runs`）import `listAgentRuns` / `getAgentRun` / `countAgentRunsByStatus`，讀 **snake_case**。`GET /api/runs*` 是同一組欄位的 camelCase 包裝，給編排器 POST/PATCH 用。後台與 UserMenu **不**連 `/runs`。
 
 ---
 
@@ -381,7 +387,30 @@ erDiagram
 
 聚合查詢都在 `lib/db.ts`：`getTotals`、`getUsageByScenario`、`getDailyUsage`、
 `getRecentSessions`、`getRecentCalls`、`getSessionStats`。
-觀察介面在 [`/usage`](../app/usage/page.tsx)。
+觀察介面是 **兩邊**：standalone [`/usage`](../app/usage/page.tsx)（RSC，把 helper snake_case map 成 camelCase）以及後台 `/backend` 的 **用量統計** pane（client `GET /api/usage`，回應已是 camelCase）。頁面仍在；pane 不渲染 `logCount` / `logSummary`。
+
+`GET /api/usage`（session-gated；`getCurrentUser()`；`user_student_id = user.id`；JSON **camelCase**，不回 snake_case）：
+
+| 項目 | 內容 |
+|---|---|
+| Method | `GET` |
+| Path | `/api/usage` |
+| Query | 無 |
+| **200** | `{ totals, chat, tts, byScenario, sessions, logCount, logSummary, daily, scenarios }` |
+| **401** | `{ "error": "請先登入" }` |
+| **500** | `{ "error": "無法讀取用量" }`（無 SQL、無密鑰） |
+
+Loader 與 `/usage` 相同：`getTotals(user.id)`、`getTotals(..., "chat")`、`getTotals(..., "tts")`、`getUsageByScenario`、`getRecentSessions`、`countLogs(user.id, {})`、`getLogSummary`、`getDailyUsage(user.id, 14)`。`daily` 是 helper 原列（前端 `fillDays`，讀 `totalTokens`）。`scenarios` 只有 `{ id, emoji, title, titleZh }`（`byScenario` + `sessions` 出現過的 id；不含 `persona` / goals）。
+
+| Object | Fields |
+|---|---|
+| `totals` / `chat` / `tts` | `calls`, `sessions`, `promptTokens`, `outputTokens`, `thoughtTokens`, `totalTokens`, `avgLatency`, `failures` |
+| `byScenario[]` | `scenarioId`, `calls`, `sessions`, `totalTokens`, `promptTokens`, `outputTokens` |
+| `sessions[]` | `id`, `scenarioId`, `createdAt`, `updatedAt`, `turns`, `totalTokens` |
+| `logSummary[]` | `operation`, `platform`, `calls`, `failures`, `avgMs`, `totalTokens` |
+| `daily[]` | `day`, `calls`, `totalTokens` |
+| `scenarios[]` | `id`, `emoji`, `title`, `titleZh` |
+| top-level | `logCount`（number）、`logSummary` |
 
 談話回饋 helpers（一律 `user_student_id = user.id`）：
 
@@ -401,6 +430,36 @@ erDiagram
 | `getAgentRun(userId, id)` | 單筆 run + turns（`id ASC`）；找不到或 `user_id` 不符回 `undefined` |
 | `countAgentRunsByStatus(userId)` | 全部 run 的 `running_count` / `passed_count` / `stopped_count`（不受 50 筆上限） |
 | `createAgentRun` / `appendAgentTurn` / `patchAgentRun` | API 寫入；一律帶 `user_id` |
+
+音色目錄（[`/voices`](../app/voices/page.tsx)）的查詢也在 `lib/db.ts`。這是**全域**表，列上**沒有** `user_id`：任何登入者看到同一份，A 的 PATCH/DELETE 會出現在 B 的下一次 GET。練習資料仍用 `user.id` 過濾；這份目錄不。CRUD **不**寫 `api_calls` / `api_logs`（沒有對外 provider 呼叫）。密鑰不進 D1。
+
+| Helper | 用途 |
+|---|---|
+| `listVoices()` | 全部 `elevenlabs_voices`，`id ASC`；不過濾使用者 |
+| `getVoice(id)` | 單列；沒有則 `undefined` |
+| `insertVoice({ id, voice_id, label, is_free })` | 新增；`is_free` 為 `0` \| `1`。PK 衝突丟 `DuplicateVoiceIdError`（route 回 409） |
+| `updateVoice(id, patch)` | 補 `voice_id?` / `label?` / `is_free?`；列不存在回 `undefined` |
+| `countCharactersUsingVoice(id)` | `characters.elevenlabs_voice_id` 的 `COUNT(*)` |
+| `deleteVoice(id)` | `'ok'` \| `'not_found'` \| `'in_use'`（count ≥ 1 時不 DELETE） |
+| `listCharacters()` | 全部人物，`id ASC`；不過濾使用者 |
+| `getCharacter(id)` | 單列；沒有則 `undefined` |
+| `updateCharacterVoice(id, elevenlabs_voice_id)` | 改指派；人物不存在回 `undefined`。route 必須先確認音色存在再 UPDATE |
+| `defaultVoiceId()` | **未改**：`SELECT voice_id FROM elevenlabs_voices ORDER BY is_free DESC, id ASC LIMIT 1` |
+| `resolveSessionVoiceId(sessionId)` | **未改**：session → scenario → character → voice 的平台 `voice_id` |
+
+REST（JSON camelCase；每個 method 都要 `getCurrentUser()`，失敗 **401** `{ "error": "請先登入" }`）：
+
+| Method | Path | 成功 |
+|---|---|---|
+| `GET` | `/api/voices` | **200** `{ "voices": VoiceJSON[] }` |
+| `POST` | `/api/voices` | **201** `{ "voice": VoiceJSON }` |
+| `GET` | `/api/voices/:id` | **200** `{ "voice": VoiceJSON }` |
+| `PATCH` | `/api/voices/:id` | **200** `{ "voice": VoiceJSON }` |
+| `DELETE` | `/api/voices/:id` | **204** |
+| `GET` | `/api/characters` | **200** `{ "characters": CharacterJSON[] }` |
+| `PATCH` | `/api/characters/:id` | **200** `{ "character": CharacterJSON }` |
+
+`VoiceJSON`：`{ id, voiceId, label, isFree }`。`CharacterJSON`：`{ id, name, elevenlabsVoiceId }`。頁面可 `fetch` 這些 API；不要另寫一套 schema。
 
 ---
 
@@ -471,7 +530,7 @@ Google 現在推薦新專案用 Interactions API，但它**把對話歷史存在
 
 ## 3.5 呼叫紀錄怎麼收集
 
-`lib/gemini.ts` **會被 client 端 import**（`lib/settings.ts`、`components/settings-menu.tsx`
+`lib/gemini.ts` **會被 client 端 import**（`lib/settings.ts`、後台 `/backend`
 需要 `VOICES`、`DEFAULT_MODEL` 這些常數），所以**那個檔案裡絕對不能 import 資料庫**，
 否則前端 build 會炸。
 
@@ -487,40 +546,68 @@ Route handler（server-only）再傳 `onCall: (call) => logApiCall({ ...call, se
 
 ### 檢視介面
 
-[`/logs`](../app/logs/page.tsx) 是這張表的專屬頁面：依操作與狀態篩選、全文搜尋
-（比對 `input` / `output` / `error` / `model`）、每頁 25 筆分頁，點任一列展開看完整送出與收到內容。
+觀察介面是 **兩邊**：standalone [`/logs`](../app/logs/page.tsx) 與後台 `/backend` 的 **API 呼叫紀錄** pane。
 
+[`/logs`](../app/logs/page.tsx) 仍是這張表的專屬 RSC 頁：依操作與狀態篩選、全文搜尋
+（比對 `input` / `output` / `error` / `model`）、每頁 25 筆分頁，點任一列展開看完整送出與收到內容。
 篩選與分頁**全部走 URL query（`?op=` / `?status=` / `?q=` / `?page=`）**，
 展開用原生 `<details>`，所以整頁是純伺服器渲染，沒有任何 client JS。
 `/usage` 只保留摘要與連往這裡的入口，不重複列表格。
+
+後台 pane 打 `GET /api/logs`（同一組 camelCase 欄位）；篩選在 API query，**不**寫進 `/backend` searchParams。Helper 簽名不變；`api_calls` 與 `api_logs` 不合併。
+
+`GET /api/logs`（session-gated；`getCurrentUser()`；`user_student_id = user.id`；JSON **camelCase**）：
+
+| 項目 | 內容 |
+|---|---|
+| Method | `GET` |
+| Path | `/api/logs` |
+| Query | `op`（可選 operation）、`status`（`ok` \| `failed`；其他忽略）、`q`（trim；空則省略）、`page`（整數 ≥ 1；與 `/logs` 相同 clamp） |
+| **200** | `{ logs, total, grandTotal, page, pages, operations, summary }` |
+| **401** | `{ "error": "請先登入" }` |
+| **500** | `{ "error": "無法讀取呼叫紀錄" }`（無 SQL、無密鑰） |
+
+`PAGE_SIZE = 25`。`total` = 篩選後筆數；`grandTotal` = `countLogs(user.id, {})`；`pages = max(1, ceil(total / 25))`；`page` = clamp 後的當頁。`operations` 是 `string[]`。`summary` 是 `logSummary[]`（欄位同 `GET /api/usage`）。
+
+| Object | Fields |
+|---|---|
+| top-level | `logs`, `total`, `grandTotal`, `page`, `pages`, `operations`（`string[]`）、`summary`（`logSummary[]`） |
+| `logs[]` | `id`, `platform`, `endpoint`, `operation`, `model`, `detail`, `sessionId`, `userStudentId`, `input`, `output`, `inputTokens`, `outputTokens`, `totalTokens`, `status`, `ok`（**boolean**，`ok === 1`）、`error`, `requestedAt`, `returnedAt`, `durationMs` |
 
 ## 4. API key 的流向
 
 ```
 對話 / 語音
    → 優先用伺服器 GEMINI_API_KEY（.env.local / .dev.vars / Worker secret）
-   → 沒有伺服器 key 才用設定面板寫進 localStorage、經 x-gemini-key 送來的那把
+   → 沒有伺服器 key 才用後台 `/backend` 寫進 localStorage、經 x-gemini-key 送來的那把
    → 轉成 x-goog-api-key 送給 Google
 ```
 
 **key 不會寫進資料庫，也不會出現在任何 log。**
-設定面板的 key 仍可驗證（`POST /api/key-check` 優先讀標頭）；`GET /api/key-check` 只回 `{ configured }`，表示伺服器有沒有備援 key。見 [`lib/gemini-key.ts`](../lib/gemini-key.ts)。
+後台 `/backend` 的 key 仍可驗證（`POST /api/key-check` 優先讀標頭）；`GET /api/key-check` 只回 `{ configured }`，表示伺服器有沒有備援 key。見 [`lib/gemini-key.ts`](../lib/gemini-key.ts)。
 
 驗證用 [`/api/key-check`](../app/api/key-check/route.ts)，它呼叫 `GET /v1beta/models?pageSize=1`
 ——**不花任何 token** 就能確認 key 有效。
 
-ElevenLabs 的 key **只存在** `.env.local` 的 `ELEVENLABS_API_KEY`（沒有 `NEXT_PUBLIC_` 前綴；
-正式環境設在 Worker secret，本機 preview 放 `.dev.vars`）。
+ElevenLabs 的 key **只存在** env / Worker secret 的 `ELEVENLABS_API_KEY`（沒有 `NEXT_PUBLIC_` 前綴；
+本機 `next dev` 讀 `.env.local`，preview 讀 `.dev.vars`，正式用 `wrangler secret`）。**不要**把檔案內容寫進這份文件或 commit。
 瀏覽器打 [`/api/elevenlabs`](../app/api/elevenlabs/route.ts)，由伺服器加上 `xi-api-key` 轉送給 ElevenLabs。
-**音色一律讀 `elevenlabs_voices.voice_id`**：有 session 用 `resolveSessionVoiceId()`
-（session → scenario → character → voice），沒有 session 用 `defaultVoiceId()`
-（`ORDER BY is_free DESC` 取一筆，即 Bella）。env 的 `ELEVENLABS_VOICE_ID` 已不再參與選音。
+本機與正式的 TTS **音色只從各自綁定的 D1** 選，同一條程式碼、不另開 SQLite：有 session 用 `resolveSessionVoiceId()`
+（session → scenario → character → voice 的平台 `voice_id`），沒有 session 用 `defaultVoiceId()`
+（`ORDER BY is_free DESC, id ASC` 取一筆）。成功回應的 `x-voice` 標頭就是這次選到的平台 `voice_id`（不是內部 catalog `id`）。
+環境變數名 `ELEVENLABS_VOICE_ID` **不是**選音來源，產品碼也不讀它。
+模型只看請求：`body.model` 的 id 在 `ELEVENLABS_MODELS` 裡就用該 id，否則用程式常數 `DEFAULT_ELEVENLABS_MODEL`。
+環境變數名 `ELEVENLABS_MODEL` **不是**選模型來源，產品碼也不讀它。沒有 D1 模型欄。成功回應的 `x-model` 就是實際送給 ElevenLabs 的 id。
+`ELEVENLABS_API_KEY` 仍只走 env / Worker secret，永不進 D1 或 log。
+登入者在 [`/voices`](../app/voices/page.tsx) 維護這份全域目錄（`/api/voices*`、`/api/characters*`）；
+`/tts` 只讀 `defaultVoiceId()`。
 
 對話頁（獨白式與真實情境）預設走這條 TTS：`speakReply()` 依設定打 `/api/elevenlabs`，
 把家教回覆用角色音色唸出來，舞台畫面仍依 phase 切靜態圖。測試頁在 [`/tts`](../app/tts/page.tsx)。
 
 有 `scenarioId` 時會建／續 session，並寫 `api_calls`（`kind='tts'`，token 為 0——ElevenLabs 不回 `usageMetadata`，不估算）以及 `api_logs`（`platform='elevenlabs'`）。
-測試頁沒帶情境，只寫 `api_logs`，音色用 `defaultVoiceId()`（DB）。
+測試頁沒帶情境，只寫 `api_logs`，音色用 `defaultVoiceId()`（DB）。目錄是空的時候
+`POST /api/elevenlabs` 回 **400** `{ "error": "還沒有音色。請到音色目錄新增一顆。" }`。
 
 ---
 
@@ -534,7 +621,7 @@ ElevenLabs 的 key **只存在** `.env.local` 的 `ELEVENLABS_API_KEY`（沒有 
 
 ### 家教的聲音（TTS）— 三種來源可切換
 
-設定面板的「家教的聲音」有三個選項，**預設是角色（ElevenLabs）**：
+後台 `/backend` 的「家教的聲音」有三個選項，**預設是角色（ElevenLabs）**：
 
 | 來源 | 實作 | 成本 | 音質 |
 |---|---|---|---|
@@ -544,7 +631,7 @@ ElevenLabs 的 key **只存在** `.env.local` 的 `ELEVENLABS_API_KEY`（沒有 
 
 沒存過偏好時 `getVoiceSource()` 回 `elevenlabs`。雲端合成失敗會退回瀏覽器語音，對話不會突然安靜。
 
-Voice Library 的音色在免費方案會回 402，畫面會說明原因並改用系統語音。角色音色一律存在 `elevenlabs_voices`（`is_free=1` 標記免費方案可用），env 不再參與選音。
+Voice Library 的音色在免費方案會回 402，畫面會說明原因並改用系統語音。角色音色一律存在 `elevenlabs_voices`（`is_free=1` 標記免費方案可用），由音色目錄指定。
 
 **Gemini TTS 的呼叫方式**（[`synthesizeSpeech`](../lib/gemini.ts)）：
 

@@ -1,9 +1,7 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ChatRoom } from "@/components/chat-room";
 import { LiveRoom } from "@/components/live-room";
 import { ModePicker } from "@/components/mode-picker";
-import { SettingsMenu } from "@/components/settings-menu";
 import { getCurrentUser } from "@/lib/current-user";
 import {
   getHistory,
@@ -95,12 +93,6 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
     <div className="flex min-h-full flex-1 flex-col">
       <header className="sticky top-0 z-30 border-b border-line/70 bg-canvas/80 px-5 backdrop-blur-md sm:px-8">
         <div className="mx-auto flex h-16 w-full max-w-3xl items-center gap-3">
-          <Link
-            href="/scenarios"
-            className="rounded-lg px-2 py-1.5 text-[14px] text-ink-muted transition-colors hover:bg-surface-2 hover:text-ink"
-          >
-            ←
-          </Link>
           <span
             className="tinted flex h-9 w-9 items-center justify-center rounded-lg text-[18px]"
             style={
@@ -127,7 +119,6 @@ export default async function ChatPage(props: PageProps<"/chat/[id]">) {
               )}
             </p>
           </div>
-          <SettingsMenu />
         </div>
       </header>
 

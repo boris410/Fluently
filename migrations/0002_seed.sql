@@ -1,21 +1,21 @@
--- 0002_seed: base data. Idempotent so re-applying is safe.
+-- 0002_seed: base data.
+-- Catalog rows (elevenlabs_voices, characters) are insert-if-missing
+-- (ON CONFLICT(id) DO NOTHING) so /voices edits survive a local re-seed
+-- via `wrangler d1 execute fluently_db --local --file=migrations/0002_seed.sql`.
+-- `wrangler d1 migrations apply` will not re-run this file.
+-- Scene / scenario upserts stay DO UPDATE.
 -- Learners are created on first Google sign-in (better-auth databaseHook),
 -- not seeded here.
 
 -- Voices -------------------------------------------------------------------
 INSERT INTO elevenlabs_voices (id, voice_id, label, is_free)
 VALUES ('bella', 'EXAVITQu4vr4xnSDxMaL', 'Bella', 1)
-ON CONFLICT(id) DO UPDATE SET
-  voice_id = excluded.voice_id,
-  label    = excluded.label,
-  is_free  = excluded.is_free;
+ON CONFLICT(id) DO NOTHING;
 
 -- Characters ---------------------------------------------------------------
 INSERT INTO characters (id, name, elevenlabs_voice_id)
 VALUES ('bella', 'Bella', 'bella')
-ON CONFLICT(id) DO UPDATE SET
-  name                = excluded.name,
-  elevenlabs_voice_id = excluded.elevenlabs_voice_id;
+ON CONFLICT(id) DO NOTHING;
 
 -- Scenes -------------------------------------------------------------------
 INSERT INTO scenes (id, title, title_zh, emoji, tint_light, tint_dark) VALUES

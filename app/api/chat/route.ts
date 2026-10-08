@@ -35,7 +35,7 @@ export async function POST(request: Request) {
 
   if (!apiKey) {
     return Response.json(
-      { error: "還沒有 API key。打開右上角設定，貼上你的 Gemini API key。" },
+      { error: "還沒有 API key。到後台貼上你的 Gemini API key。" },
       { status: 401 },
     );
   }
